@@ -4,50 +4,50 @@
   "categories": {
     "greeting": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Select_4_AoM.ogg", "line": "Πρόσταγμα? (Command?)" },
-        { "file": "Greeks_Villager_Male_Select_1_AoM.ogg", "line": "Λέγε (Speak)" },
-        { "file": "Greeks_Villager_Male_Select_3_AoM.ogg", "line": "Ἕτοιμος (Ready)" }
+        { "file": "Greeks_Villager_Male_Select_4_AoM.wav", "line": "Πρόσταγμα? (Command?)" },
+        { "file": "Greeks_Villager_Male_Select_1_AoM.wav", "line": "Λέγε (Speak)" },
+        { "file": "Greeks_Villager_Male_Select_3_AoM.wav", "line": "Ἕτοιμος (Ready)" }
       ]
     },
     "acknowledge": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Task_1_AoM.ogg", "line": "Ἔστω (Let it be)" },
-        { "file": "Greeks_Villager_Male_Task_2_AoM.ogg", "line": "Ναί (Yes)" },
-        { "file": "Greeks_Villager_Male_Task_3_AoM.ogg", "line": "Μάλιστα (Of course)" },
-        { "file": "Greeks_Villager_Male_Task_4_AoM.ogg", "line": "Βούλομαι (I will)" }
+        { "file": "Greeks_Villager_Male_Task_1_AoM.wav", "line": "Ἔστω (Let it be)" },
+        { "file": "Greeks_Villager_Male_Task_2_AoM.wav", "line": "Ναί (Yes)" },
+        { "file": "Greeks_Villager_Male_Task_3_AoM.wav", "line": "Μάλιστα (Of course)" },
+        { "file": "Greeks_Villager_Male_Task_4_AoM.wav", "line": "Βούλομαι (I will)" }
       ]
     },
     "complete": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Build_AoM.ogg", "line": "Τέκτων (Mason)" },
-        { "file": "Greeks_Villager_Male_Task_1_AoM.ogg", "line": "Ἔστω (Let it be)" },
-        { "file": "Greeks_Villager_Male_Task_2_AoM.ogg", "line": "Ναί (Yes)" },
-        { "file": "Greeks_Villager_Male_Task_3_AoM.ogg", "line": "Μάλιστα (Of course)" },
-        { "file": "Greeks_Villager_Male_Select_3_AoM.ogg", "line": "Ἕτοιμος (Ready)" }
+        { "file": "Greeks_Villager_Male_Build_AoM.wav", "line": "Τέκτων (Mason)" },
+        { "file": "Greeks_Villager_Male_Task_1_AoM.wav", "line": "Ἔστω (Let it be)" },
+        { "file": "Greeks_Villager_Male_Task_2_AoM.wav", "line": "Ναί (Yes)" },
+        { "file": "Greeks_Villager_Male_Task_3_AoM.wav", "line": "Μάλιστα (Of course)" },
+        { "file": "Greeks_Villager_Male_Select_3_AoM.wav", "line": "Ἕτοιμος (Ready)" }
       ]
     },
     "error": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Attack_AoM.ogg", "line": "Εἰσβολή! (Invasion!)" }
+        { "file": "Greeks_Villager_Male_Attack_AoM.wav", "line": "Εἰσβολή! (Invasion!)" }
       ]
     },
     "permission": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Select_4_AoM.ogg", "line": "Πρόσταγμα? (Command?)" },
-        { "file": "Greeks_Villager_Male_Select_1_AoM.ogg", "line": "Λέγε (Speak)" },
-        { "file": "Greeks_Villager_Male_Select_2_AoM.ogg", "line": "Πρόσεχε! (Be careful!)" }
+        { "file": "Greeks_Villager_Male_Select_4_AoM.wav", "line": "Πρόσταγμα? (Command?)" },
+        { "file": "Greeks_Villager_Male_Select_1_AoM.wav", "line": "Λέγε (Speak)" },
+        { "file": "Greeks_Villager_Male_Select_2_AoM.wav", "line": "Πρόσεχε! (Be careful!)" }
       ]
     },
     "resource_limit": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Select_2_AoM.ogg", "line": "Πρόσεχε! (Be careful!)" }
+        { "file": "Greeks_Villager_Male_Select_2_AoM.wav", "line": "Πρόσεχε! (Be careful!)" }
       ]
     },
     "annoyed": {
       "sounds": [
-        { "file": "Greeks_Villager_Male_Attack_AoM.ogg", "line": "Εἰσβολή! (Invasion!)" },
-        { "file": "Greeks_Villager_Male_Chop_AoM.ogg", "line": "Δρυτόμος (Woodcutter)" },
-        { "file": "Greeks_Villager_Male_Select_2_AoM.ogg", "line": "Πρόσεχε! (Be careful!)" }
+        { "file": "Greeks_Villager_Male_Attack_AoM.wav", "line": "Εἰσβολή! (Invasion!)" },
+        { "file": "Greeks_Villager_Male_Chop_AoM.wav", "line": "Δρυτόμος (Woodcutter)" },
+        { "file": "Greeks_Villager_Male_Select_2_AoM.wav", "line": "Πρόσεχε! (Be careful!)" }
       ]
     }
   }

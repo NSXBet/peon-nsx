@@ -5,8 +5,7 @@
     "greeting": {
       "sounds": [
         { "file": "PeasantReady1.wav", "line": "Я готов." },
-        { "file": "PeasantWhat1.wav", "line": "Да, господин?" },
-        { "file": "PeasantWhat3.wav", "line": "Опять работа?!" }
+        { "file": "PeasantWhat1.wav", "line": "Да, господин?" }
       ]
     },
     "acknowledge": {
@@ -17,8 +16,7 @@
     },
     "complete": {
       "sounds": [
-        { "file": "PeasantReady1.wav", "line": "Готово." },
-        { "file": "PeasantWhat4.wav", "line": "Ещё работа?" },
+        { "file": "PeasantWhat3.wav", "line": "Опять работа?!" },
         { "file": "PeasantYes4.wav", "line": "Ну, я пошёл!" }
       ]
     },

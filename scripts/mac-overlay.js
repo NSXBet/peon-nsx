@@ -71,11 +71,11 @@ function run(argv) {
     var contentView = win.contentView;
 
     // Layout: icon on left (if exists), text fills the rest
-    var textX = 10, textWidth = winWidth - 20;
+    var textX = 10, textWidth = winWidth - 30;
 
     if (iconPath !== '' && $.NSFileManager.defaultManager.fileExistsAtPath(iconPath)) {
       var iconImage = $.NSImage.alloc.initWithContentsOfFile(iconPath);
-      if (iconImage && !iconImage.isNil) {
+      if (iconImage && !iconImage.isNil()) {
         var iconSize = 60;
         var iconView = $.NSImageView.alloc.initWithFrame(
           $.NSMakeRect(10, (winHeight - iconSize) / 2, iconSize, iconSize)
@@ -84,13 +84,16 @@ function run(argv) {
         iconView.setImageScaling($.NSImageScaleProportionallyUpOrDown);
         contentView.addSubview(iconView);
         textX = 10 + iconSize + 5;
-        textWidth = winWidth - textX - 10;
+        textWidth = winWidth - textX - 20;
       }
     }
 
-    // Text label
+    // Text label — vertically centered
+    var font = $.NSFont.boldSystemFontOfSize(16);
+    var textHeight = font.ascender - font.descender + font.leading + 4;
+    var textY = (winHeight - textHeight) / 2;
     var label = $.NSTextField.alloc.initWithFrame(
-      $.NSMakeRect(textX, 0, textWidth, winHeight)
+      $.NSMakeRect(textX, textY, textWidth, textHeight)
     );
     label.setStringValue($(message));
     label.setBezeled(false);
@@ -99,14 +102,8 @@ function run(argv) {
     label.setSelectable(false);
     label.setTextColor($.NSColor.whiteColor);
     label.setAlignment($.NSTextAlignmentCenter);
-
-    // Bold system font 16pt
-    label.setFont($.NSFont.boldSystemFontOfSize(16));
-
-    // Truncate with ellipsis
+    label.setFont(font);
     label.setLineBreakMode($.NSLineBreakByTruncatingTail);
-
-    // Vertically center (single-line): use cell to set vertical centering
     label.cell.setWraps(false);
 
     contentView.addSubview(label);

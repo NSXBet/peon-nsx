@@ -40,7 +40,7 @@ AI coding agents don't notify you when they finish or need permission. You tab a
 ### Option 1: Homebrew (recommended)
 
 ```bash
-brew install PeonPing/tap/peon-ping
+brew install NSXBet/tap/peon-nsx
 ```
 
 Then run `peon-ping-setup` to register hooks and download sound packs. macOS and Linux.
@@ -48,13 +48,13 @@ Then run `peon-ping-setup` to register hooks and download sound packs. macOS and
 ### Option 2: Installer script (macOS, Linux, WSL2)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash
 ```
 
 ### Option 3: Installer for Windows
 
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.ps1" -UseBasicParsing | Invoke-Expression
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.ps1" -UseBasicParsing | Invoke-Expression
 ```
 
 Installs 5 curated packs by default (Warcraft, StarCraft, Portal). Re-run to update while preserving config/state. Or **[pick your packs interactively at peonping.com](https://peonping.com/#picker)** and get a custom install command.
@@ -72,9 +72,9 @@ Useful installer flags:
 Examples:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash -s -- --all
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash -s -- --packs=peon,sc_kerrigan
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash -s -- --local
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash -s -- --packs=peon,sc_kerrigan
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash -s -- --local
 ```
 
 If a global install exists and you install local (or vice versa), the installer prompts you to remove the existing one to avoid conflicts.
@@ -82,7 +82,7 @@ If a global install exists and you install local (or vice versa), the installer 
 ### Option 4: Clone and inspect first
 
 ```bash
-git clone https://github.com/PeonPing/peon-ping.git
+git clone https://github.com/NSXBet/peon-nsx.git
 cd peon-ping
 ./install.sh
 ```
@@ -287,8 +287,8 @@ peon-ping works with any agentic IDE that supports hooks. Adapters translate IDE
 | **Claude Code** | Built-in | `curl \| bash` install handles everything |
 | **OpenAI Codex** | Adapter | Add `notify = ["bash", "/absolute/path/to/.claude/hooks/peon-ping/adapters/codex.sh"]` to `~/.codex/config.toml` |
 | **Cursor** | Built-in | `curl \| bash` or `peon-ping-setup` auto-detects and registers Cursor hooks |
-| **OpenCode** | Adapter | `curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/opencode.sh \| bash` ([setup](#opencode-setup)) |
-| **Kilo CLI** | Adapter | `curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/kilo.sh \| bash` ([setup](#kilo-cli-setup)) |
+| **OpenCode** | Adapter | `curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/opencode.sh \| bash` ([setup](#opencode-setup)) |
+| **Kilo CLI** | Adapter | `curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/kilo.sh \| bash` ([setup](#kilo-cli-setup)) |
 | **Kiro** | Adapter | Add hook entries to `~/.kiro/agents/peon-ping.json` pointing to `adapters/kiro.sh` ([setup](#kiro-setup)) |
 | **Windsurf** | Adapter | Add hook entries to `~/.codeium/windsurf/hooks.json` pointing to `adapters/windsurf.sh` ([setup](#windsurf-setup)) |
 | **Google Antigravity** | Adapter | `bash ~/.claude/hooks/peon-ping/adapters/antigravity.sh` (requires `fswatch`: `brew install fswatch`) |
@@ -301,7 +301,7 @@ A native TypeScript plugin for [OpenCode](https://opencode.ai/) with full [CESP 
 **Quick install:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/opencode.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/opencode.sh | bash
 ```
 
 The installer copies `peon-ping.ts` to `~/.config/opencode/plugins/` and creates a config at `~/.config/opencode/peon-ping/config.json`. Packs are stored at the shared CESP path (`~/.openpeon/packs/`).
@@ -332,7 +332,7 @@ The installer copies `peon-ping.ts` to `~/.config/opencode/plugins/` and creates
 By default, `terminal-notifier` shows a generic Terminal icon. The included script replaces it with the peon icon using built-in macOS tools (`sips` + `iconutil`) — no extra dependencies.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/opencode/setup-icon.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/opencode/setup-icon.sh)
 ```
 
 Or if installed locally (Homebrew / git clone):
@@ -354,7 +354,7 @@ A native TypeScript plugin for [Kilo CLI](https://github.com/kilocode/cli) with 
 **Quick install:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/kilo.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/kilo.sh | bash
 ```
 
 The installer copies `peon-ping.ts` to `~/.config/kilo/plugins/` and creates a config at `~/.config/kilo/peon-ping/config.json`. Packs are stored at the shared CESP path (`~/.openpeon/packs/`).
@@ -584,14 +584,14 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\hooks\peon-pi
 4. **Notifications** — updates the Terminal tab title and sends a desktop notification if the terminal isn't focused
 5. **Remote routing** — in SSH sessions, devcontainers, and Codespaces, audio and notification requests are forwarded over HTTP to a [relay server](#remote-development-ssh--devcontainers--codespaces) on your local machine
 
-Sound packs are downloaded from the [OpenPeon registry](https://github.com/PeonPing/registry) at install time. The official packs are hosted in [PeonPing/og-packs](https://github.com/PeonPing/og-packs). Sound files are property of their respective publishers (Blizzard, Valve, EA, etc.) and are distributed under fair use for personal notification purposes.
+Sound packs are downloaded from the [OpenPeon registry](https://github.com/NSXBet/registry) at install time. The official packs are hosted in [PeonPing/og-packs](https://github.com/PeonPing/og-packs). Sound files are property of their respective publishers (Blizzard, Valve, EA, etc.) and are distributed under fair use for personal notification purposes.
 
 ## Links
 
 - [@peonping on X](https://x.com/peonping) — updates and announcements
 - [peonping.com](https://peonping.com/) — landing page
 - [openpeon.com](https://openpeon.com/) — CESP spec, pack browser, creation guide
-- [OpenPeon registry](https://github.com/PeonPing/registry) — pack registry (GitHub Pages)
+- [OpenPeon registry](https://github.com/NSXBet/registry) — pack registry (GitHub Pages)
 - [og-packs](https://github.com/PeonPing/og-packs) — official sound packs
 - [License (MIT)](LICENSE)
 

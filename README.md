@@ -192,6 +192,53 @@ Config location depends on install mode:
 - **pack_rotation_mode**: `"random"` (default), `"round-robin"`, or `"agentskill"`. With `random`/`round-robin`, each session picks one pack from `pack_rotation`. With `agentskill`, the `/peon-ping-use <pack>` command assigns a pack per session. Invalid or missing packs fall back to `active_pack` and the stale assignment is removed.
 - **session_ttl_days** (number, default: 7): Expire stale per-session pack assignments older than N days. Keeps `.state.json` from growing unbounded when using `agentskill` mode.
 
+### Desktop notifications
+
+By default, peon-ping sends overlay banners when your terminal is not in focus — so you hear and see it even when you've tabbed away.
+
+#### Styles
+
+| Style | Command | Description |
+|---|---|---|
+| `overlay` | `peon notifications overlay` | Large banner (default) — dark background with color accent stripe, visible on all screens |
+| `standard` | `peon notifications standard` | System notification — uses `osascript` or `terminal-notifier` on macOS, toast on WSL |
+
+#### Testing your setup
+
+Send a test notification at any time to verify your setup:
+
+```bash
+peon notifications overlay   # switch to overlay style (default)
+peon notifications test      # send a blue test notification
+```
+
+**Test each overlay color directly** (macOS — useful when developing or customizing):
+
+```bash
+# Blue — task complete / info  (#2580FF)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Task complete" "blue" "" 0 4
+
+# Red — permission needed / error  (#E03F44)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Permission needed" "red" "" 0 4
+
+# Yellow — waiting for input  (#E0752D)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Waiting for input" "yellow" "" 0 4
+
+# Green — success  (#33B878)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Done" "green" "" 0 4
+```
+
+> **Running from source?** Use `scripts/mac-overlay.js` (relative to repo root) instead of the installed path above.
+
+#### Toggle notifications
+
+```bash
+peon notifications on      # enable desktop notifications
+peon notifications off     # disable desktop notifications
+peon notifications overlay # use large overlay banners
+peon notifications standard # use standard system notifications
+```
+
 ## Peon Trainer
 
 Your peon is also your personal trainer. Built-in Pavel-style daily exercise mode — the same orc who tells you "work work" now tells you to drop and give him twenty.

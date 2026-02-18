@@ -304,13 +304,13 @@ send_notification() {
                   -title "$title" \
                   -message "$msg" \
                   -appIcon "$icon_path" \
-                  -group "peon-ping" >/dev/null 2>&1 &
+                  -group "peon-nsx" >/dev/null 2>&1 &
               else
                 terminal-notifier \
                   -title "$title" \
                   -message "$msg" \
                   -appIcon "$icon_path" \
-                  -group "peon-ping" >/dev/null 2>&1
+                  -group "peon-nsx" >/dev/null 2>&1
               fi
             else
               # Terminal.app, Warp, Ghostty, etc. — no native escape; use osascript
@@ -866,7 +866,7 @@ print('NOTIF_STYLE=' + q(ns))
           exit 1
         fi
         echo "peon-ping: sending test notification (style: $NOTIF_STYLE)"
-        PEON_TEST=1 send_notification "This is a test notification" "peon-ping" "blue"
+        PEON_TEST=1 send_notification "This is a test notification" "peon-nsx" "blue"
         exit 0 ;;
       *)
         echo "Usage: peon notifications <on|off|overlay|standard|test>" >&2; exit 1 ;;
@@ -1376,7 +1376,7 @@ if not mn or not mn.get('service') or not mn.get('enabled', True):
     sys.exit(1)
 print('service=' + mn.get('service', ''))
 " > /dev/null 2>&1 || { echo "peon-ping: mobile not configured" >&2; exit 1; }
-        send_mobile_notification "Test notification from peon-ping" "peon-ping" "blue"
+        send_mobile_notification "Test notification from peon-nsx" "peon-nsx" "blue"
         wait
         echo "peon-ping: test notification sent"
         exit 0 ;;

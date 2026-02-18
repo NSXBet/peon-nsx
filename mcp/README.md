@@ -1,6 +1,6 @@
 # peon-ping MCP Server
 
-MCP server for [peon-ping](https://peonping.com) — gives AI agents access to 70+ game sound packs via the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for [peon-ping](https://peonping.com) — gives AI agents access to 75+ game sound packs via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 ## What it does
 

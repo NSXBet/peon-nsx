@@ -347,7 +347,7 @@ export default function LandingPage() {
   const [playingPackBtn, setPlayingPackBtn] = useState<string | null>(null);
 
   /* ---- Pack count ---- */
-  const [packCount, setPackCount] = useState("70+");
+  const [packCount, setPackCount] = useState("75+");
 
   /* ---- Picker state ---- */
   const [registryPacks, setRegistryPacks] = useState<RegistryPack[]>([]);

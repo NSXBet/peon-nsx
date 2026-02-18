@@ -512,7 +512,7 @@ Mobile notifications fire on every event regardless of window focus — they're 
 
 ## Sound packs
 
-70+ packs across Warcraft, StarCraft, Red Alert, Portal, Zelda, Dota 2, Helldivers 2, Elder Scrolls, and more. The default install includes 10 curated English packs:
+75+ packs across Warcraft, StarCraft, Red Alert, Portal, Zelda, Dota 2, Helldivers 2, Elder Scrolls, and more. The default install includes 10 curated English packs:
 
 | Pack | Character | Sounds |
 |---|---|---|

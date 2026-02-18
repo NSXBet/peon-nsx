@@ -67,6 +67,7 @@ MCP resources: `peon-ping://catalog`, `peon-ping://pack/{name}`
 - Kiro (Amazon)
 - Windsurf (Codeium)
 - Google Antigravity
+- OpenClaw (via adapters/openclaw.sh — call with any CESP category or Claude Code event name)
 
 ## Sound Packs (75+ available)
 

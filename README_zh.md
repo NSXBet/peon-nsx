@@ -184,6 +184,53 @@ peon-ping 在 Claude Code 中安装两个斜杠命令：
 - **pack_rotation_mode**：`"random"`（默认）、`"round-robin"` 或 `"agentskill"`。使用 `random`/`round-robin` 时，每个会话从 `pack_rotation` 中选择一个语音包。使用 `agentskill` 时，`/peon-ping-use <pack>` 命令为每个会话分配语音包。无效或缺失的语音包会回退到 `active_pack`，过期的分配会被移除。
 - **session_ttl_days**（数字，默认：7）：使超过 N 天的陈旧每会话语音包分配过期。防止使用 `agentskill` 模式时 `.state.json` 无限增长。
 
+### 桌面通知
+
+默认情况下，当终端不在焦点时，peon-ping 会发送浮层横幅——即使你切换到其他窗口也能听到并看到提示。
+
+#### 样式
+
+| 样式 | 命令 | 说明 |
+|---|---|---|
+| `overlay` | `peon notifications overlay` | 大横幅（默认）— 深色背景带颜色强调条，显示在所有屏幕上 |
+| `standard` | `peon notifications standard` | 系统通知 — macOS 使用 `osascript` 或 `terminal-notifier`，WSL 使用 toast |
+
+#### 测试通知
+
+随时发送测试通知以验证设置：
+
+```bash
+peon notifications overlay   # 切换到浮层样式（默认）
+peon notifications test      # 发送蓝色测试通知
+```
+
+**直接测试每种浮层颜色**（macOS — 开发或自定义时使用）：
+
+```bash
+# 蓝色 — 任务完成 / 信息  (#2580FF)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Task complete" "blue" "" 0 4
+
+# 红色 — 需要权限 / 错误  (#E03F44)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Permission needed" "red" "" 0 4
+
+# 黄色 — 等待输入  (#E0752D)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Waiting for input" "yellow" "" 0 4
+
+# 绿色 — 成功  (#33B878)
+osascript -l JavaScript ~/.claude/hooks/peon-ping/scripts/mac-overlay.js "Done" "green" "" 0 4
+```
+
+> **从源代码运行？** 将路径中的 `~/.claude/hooks/peon-ping/scripts/mac-overlay.js` 替换为相对于仓库根目录的 `scripts/mac-overlay.js`。
+
+#### 开关通知
+
+```bash
+peon notifications on       # 启用桌面通知
+peon notifications off      # 禁用桌面通知
+peon notifications overlay  # 使用大浮层横幅
+peon notifications standard # 使用标准系统通知
+```
+
 ## Peon 教练
 
 你的苦工也是你的私人教练。内置帕维尔风格（Pavel-style）每日锻炼模式 — 那个告诉你"work work"的兽人现在会叫你趴下做二十个俯卧撑。

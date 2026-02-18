@@ -40,7 +40,7 @@ AI 编程助手完成任务或需要权限时不会通知你。你切换标签�
 ### 方式一：Homebrew（推荐）
 
 ```bash
-brew install PeonPing/tap/peon-ping
+brew install NSXBet/tap/peon-nsx
 ```
 
 然后运行 `peon-ping-setup` 注册钩子并下载语音包。支持 macOS 和 Linux。
@@ -48,13 +48,13 @@ brew install PeonPing/tap/peon-ping
 ### 方式二：安装脚本（macOS、Linux、WSL2）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash
 ```
 
 ### 方式三：Windows 安装
 
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.ps1" -UseBasicParsing | Invoke-Expression
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.ps1" -UseBasicParsing | Invoke-Expression
 ```
 
 默认安装 5 个精选语音包（魔兽、星际、传送门）。重新运行可更新，同时保留配置和状态。你也可以在 **[peonping.com 交互式选择语音包](https://peonping.com/#picker)** 获取自定义安装命令。
@@ -72,9 +72,9 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/PeonPing/peon-ping/mai
 示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash -s -- --all
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash -s -- --packs=peon,sc_kerrigan
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh | bash -s -- --local
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash -s -- --packs=peon,sc_kerrigan
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/install.sh | bash -s -- --local
 ```
 
 如果已存在全局安装，你又安装了本地版本（或反之），安装程序会提示你移除现有的以避免冲突。
@@ -82,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/install.sh 
 ### 方式四：克隆后检查
 
 ```bash
-git clone https://github.com/PeonPing/peon-ping.git
+git clone https://github.com/NSXBet/peon-nsx.git
 cd peon-ping
 ./install.sh
 ```
@@ -279,8 +279,8 @@ peon-ping 适用于任何支持钩子的代理式 IDE。适配器将 IDE 特定�
 | **Claude Code** | 内置 | `curl \| bash` 安装会自动处理 |
 | **OpenAI Codex** | 适配器 | 在 `~/.codex/config.toml` 中添加 `notify = ["bash", "/absolute/path/to/.claude/hooks/peon-ping/adapters/codex.sh"]` |
 | **Cursor** | 内置 | `curl \| bash` 或 `peon-ping-setup` 自动检测并注册 Cursor 钩子 |
-| **OpenCode** | 适配器 | `curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/opencode.sh \| bash`（[设置](#opencode-设置)） |
-| **Kilo CLI** | 适配器 | `curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/kilo.sh \| bash`（[设置](#kilo-cli-设置)） |
+| **OpenCode** | 适配器 | `curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/opencode.sh \| bash`（[设置](#opencode-设置)） |
+| **Kilo CLI** | 适配器 | `curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/kilo.sh \| bash`（[设置](#kilo-cli-设置)） |
 | **Kiro** | 适配器 | 在 `~/.kiro/agents/peon-ping.json` 中添加指向 `adapters/kiro.sh` 的钩子条目（[设置](#kiro-设置)） |
 | **Windsurf** | 适配器 | 在 `~/.codeium/windsurf/hooks.json` 中添加指向 `adapters/windsurf.sh` 的钩子条目（[设置](#windsurf-设置)） |
 | **Google Antigravity** | 适配器 | `bash ~/.claude/hooks/peon-ping/adapters/antigravity.sh`（需要 `fswatch`：`brew install fswatch`） |
@@ -293,7 +293,7 @@ peon-ping 适用于任何支持钩子的代理式 IDE。适配器将 IDE 特定�
 **快速安装：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/opencode.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/opencode.sh | bash
 ```
 
 安装程序将 `peon-ping.ts` 复制到 `~/.config/opencode/plugins/` 并在 `~/.config/opencode/peon-ping/config.json` 创建配置。语音包存储在共享 CESP 路径（`~/.openpeon/packs/`）。
@@ -324,7 +324,7 @@ curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/op
 默认情况下，`terminal-notifier` 显示通用终端图标。包含的脚本使用 macOS 内置工具（`sips` + `iconutil`）将其替换为苦工图标 — 无需额外依赖。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/opencode/setup-icon.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/opencode/setup-icon.sh)
 ```
 
 或本地安装（Homebrew / git clone）：
@@ -346,7 +346,7 @@ bash ~/.claude/hooks/peon-ping/adapters/opencode/setup-icon.sh
 **快速安装：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PeonPing/peon-ping/main/adapters/kilo.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NSXBet/peon-nsx/main/adapters/kilo.sh | bash
 ```
 
 安装程序将 `peon-ping.ts` 复制到 `~/.config/kilo/plugins/` 并在 `~/.config/kilo/peon-ping/config.json` 创建配置。语音包存储在共享 CESP 路径（`~/.openpeon/packs/`）。
@@ -575,14 +575,14 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\hooks\peon-pi
 4. **通知** — 更新终端标签页标题，如果终端未获得焦点则发送桌面通知
 5. **远程路由** — 在 SSH 会话、devcontainers 和 Codespaces 中，音频和通知请求通过 HTTP 转发到本地机器上的[中继服务器](#远程开发ssh--devcontainers--codespaces)
 
-语音包在安装时从 [OpenPeon 注册表](https://github.com/PeonPing/registry)下载。官方语音包托管在 [PeonPing/og-packs](https://github.com/PeonPing/og-packs)。声音文件归各自发行商（Blizzard、Valve、EA 等）所有，根据合理使用原则分发用于个人通知目的。
+语音包在安装时从 [OpenPeon 注册表](https://github.com/NSXBet/registry)下载。官方语音包托管在 [PeonPing/og-packs](https://github.com/PeonPing/og-packs)。声音文件归各自发行商（Blizzard、Valve、EA 等）所有，根据合理使用原则分发用于个人通知目的。
 
 ## 链接
 
 - [@peonping on X](https://x.com/peonping) — 更新和公告
 - [peonping.com](https://peonping.com/) — 主页
 - [openpeon.com](https://openpeon.com/) — CESP 规范、语音包浏览器、创建指南
-- [OpenPeon 注册表](https://github.com/PeonPing/registry) — 语音包注册表（GitHub Pages）
+- [OpenPeon 注册表](https://github.com/NSXBet/registry) — 语音包注册表（GitHub Pages）
 - [og-packs](https://github.com/PeonPing/og-packs) — 官方语音包
 - [许可证 (MIT)](LICENSE)
 

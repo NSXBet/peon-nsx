@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// peon-mcp.js — MCP server for peon-ping sound effects
-// One tool (play_sound) + Resources for catalog discovery
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -12,61 +10,51 @@ import { spawn, execSync } from "child_process";
 import { platform as osPlatform } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const home = process.env.HOME || process.env.USERPROFILE || "";
+const volume = parseFloat(process.env.PEON_VOLUME || "0.5") || 0.5;
+
 let version = "2.1.0";
 try { version = readFileSync(join(__dirname, "..", "VERSION"), "utf-8").trim(); } catch {}
 
-// ── Packs directory ────────────────────────────────────────────────────────
-
 function findPacksDir() {
-  const envDir = process.env.PEON_PACKS_DIR;
-  if (envDir && existsSync(envDir)) return envDir;
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  for (const dir of [
-    join(home, ".openpeon", "packs"),
-    join(home, ".claude", "hooks", "peon-ping", "packs"),
-  ]) {
+  if (process.env.PEON_PACKS_DIR && existsSync(process.env.PEON_PACKS_DIR)) return process.env.PEON_PACKS_DIR;
+  for (const dir of [join(home, ".openpeon", "packs"), join(home, ".claude", "hooks", "peon-ping", "packs")]) {
     if (existsSync(dir)) return dir;
   }
   return null;
 }
 
-// ── Catalog ────────────────────────────────────────────────────────────────
-
-let catalogCache = null;
+let catalog = null;
 
 function loadCatalog() {
-  if (catalogCache) return catalogCache;
-  const packsDir = findPacksDir();
-  if (!packsDir) { catalogCache = { packsDir: null, packs: new Map() }; return catalogCache; }
+  if (catalog) return catalog;
+  const dir = findPacksDir();
   const packs = new Map();
-  try {
-    for (const entry of readdirSync(packsDir, { withFileTypes: true })) {
+  if (dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const mp = join(packsDir, entry.name, "openpeon.json");
-      if (!existsSync(mp)) continue;
-      try { packs.set(entry.name, JSON.parse(readFileSync(mp, "utf-8"))); } catch {}
-    }
-  } catch {}
-  catalogCache = { packsDir, packs };
-  return catalogCache;
-}
-
-function resolveSound(packName, soundName) {
-  const { packsDir, packs } = loadCatalog();
-  if (!packsDir) return { error: "No packs directory found" };
-  const manifest = packs.get(packName);
-  if (!manifest) return { error: `Pack "${packName}" not found` };
-  for (const cat of Object.values(manifest.categories || {})) {
-    for (const s of cat.sounds || []) {
-      if (s.file.split("/").pop().replace(/\.\w+$/, "") === soundName) {
-        return { file: join(packsDir, packName, s.file), label: s.label || soundName };
-      }
+      const manifest = join(dir, entry.name, "openpeon.json");
+      if (!existsSync(manifest)) continue;
+      try { packs.set(entry.name, JSON.parse(readFileSync(manifest, "utf-8"))); } catch {}
     }
   }
-  return { error: `Sound "${soundName}" not found in pack "${packName}"` };
+  catalog = { dir, packs };
+  return catalog;
 }
 
-// ── Playback ───────────────────────────────────────────────────────────────
+function resolveSound(pack, sound) {
+  const { dir, packs } = loadCatalog();
+  if (!dir) return null;
+  const manifest = packs.get(pack);
+  if (!manifest) return null;
+  for (const category of Object.values(manifest.categories || {})) {
+    for (const s of category.sounds || []) {
+      const name = s.file.split("/").pop().replace(/\.\w+$/, "");
+      if (name === sound) return { path: join(dir, pack, s.file), label: s.label || sound };
+    }
+  }
+  return null;
+}
 
 function detectPlatform() {
   const p = osPlatform();
@@ -76,150 +64,107 @@ function detectPlatform() {
     try { if (/microsoft/i.test(readFileSync("/proc/version", "utf-8"))) return "wsl"; } catch {}
     return "linux";
   }
-  return "unknown";
+  return null;
 }
 
-function detectLinuxPlayer() {
+function findLinuxPlayer() {
   for (const p of ["pw-play", "paplay", "ffplay", "mpv", "play", "aplay"]) {
     try { execSync(`command -v ${p}`, { stdio: "ignore" }); return p; } catch {}
   }
   return null;
 }
 
-function playFileSync(filePath, volume) {
-  return new Promise((resolve) => {
-    const plat = detectPlatform();
-    let cmd, args;
-    switch (plat) {
-      case "mac":
-        cmd = "afplay"; args = ["-v", String(volume), filePath]; break;
-      case "linux": {
-        const player = detectLinuxPlayer();
-        if (!player) { resolve(); return; }
-        cmd = player;
-        const v = volume;
-        if (player === "pw-play" || player === "paplay") args = ["--volume", String(Math.round(v * 65536)), filePath];
-        else if (player === "ffplay") args = ["-nodisp", "-autoexit", "-volume", String(Math.round(v * 100)), filePath];
-        else if (player === "mpv") args = ["--no-video", `--volume=${Math.round(v * 100)}`, filePath];
-        else if (player === "play") args = ["-v", String(v), filePath];
-        else args = [filePath];
-        break;
-      }
-      case "wsl":
-        cmd = "powershell.exe";
-        args = ["-NoProfile", "-Command", `$p=New-Object Media.SoundPlayer '${filePath.replace(/\//g, "\\")}';$p.PlaySync()`];
-        break;
-      default: resolve(); return;
-    }
-    const child = spawn(cmd, args, { stdio: "ignore" });
-    child.on("close", () => resolve());
-    child.on("error", () => resolve());
+function getPlayCommand(filePath) {
+  const plat = detectPlatform();
+  if (plat === "mac") return ["afplay", ["-v", String(volume), filePath]];
+  if (plat === "wsl") return ["powershell.exe", ["-NoProfile", "-Command", `(New-Object Media.SoundPlayer '${filePath.replace(/\//g, "\\")}').PlaySync()`]];
+  if (plat === "linux") {
+    const player = findLinuxPlayer();
+    if (!player) return null;
+    const v = volume;
+    if (player === "pw-play" || player === "paplay") return [player, ["--volume", String(Math.round(v * 65536)), filePath]];
+    if (player === "ffplay") return [player, ["-nodisp", "-autoexit", "-volume", String(Math.round(v * 100)), filePath]];
+    if (player === "mpv") return [player, ["--no-video", `--volume=${Math.round(v * 100)}`, filePath]];
+    return [player, [filePath]];
+  }
+  return null;
+}
+
+function playFile(filePath) {
+  const cmd = getPlayCommand(filePath);
+  if (!cmd) return Promise.resolve();
+  return new Promise(resolve => {
+    const child = spawn(cmd[0], cmd[1], { stdio: "ignore" });
+    child.on("close", resolve);
+    child.on("error", resolve);
   });
 }
 
-// ── Sound queue (sequential, non-blocking tool calls) ──────────────────────
+const queue = [];
+let playing = false;
 
-const soundQueue = [];
-let draining = false;
-
-function enqueue(filePath, volume) {
-  soundQueue.push({ filePath, volume });
-  if (!draining) drain();
+function enqueue(filePath) {
+  queue.push(filePath);
+  if (!playing) drain();
 }
 
 async function drain() {
-  draining = true;
-  while (soundQueue.length > 0) {
-    const { filePath, volume: vol } = soundQueue.shift();
-    await playFileSync(filePath, vol);
-  }
-  draining = false;
+  playing = true;
+  while (queue.length) await playFile(queue.shift());
+  playing = false;
 }
 
-// ── MCP Server ─────────────────────────────────────────────────────────────
-
 const server = new McpServer({ name: "peon-ping", version });
-const volume = parseFloat(process.env.PEON_VOLUME || "0.5") || 0.5;
 
-// ── Resource: catalog (all packs + sounds) ─────────────────────────────────
-
-server.resource(
-  "catalog",
-  "peon-ping://catalog",
-  { description: "Complete sound pack catalog — all packs and their sounds organized by category", mimeType: "text/plain" },
-  () => {
-    const { packs } = loadCatalog();
-    if (packs.size === 0) return { contents: [{ uri: "peon-ping://catalog", text: "No packs installed." }] };
-
-    const lines = [`${packs.size} sound packs available. Use play_sound with "pack/SoundName".\n`];
-    for (const [name, manifest] of [...packs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      const display = manifest.display_name || name;
-      const sounds = [];
-      for (const [cat, data] of Object.entries(manifest.categories || {})) {
-        for (const s of data.sounds || []) {
-          const fname = s.file.split("/").pop().replace(/\.\w+$/, "");
-          sounds.push(`${name}/${fname} ("${s.label || fname}")`);
-        }
-      }
-      lines.push(`**${name}** (${display}) — ${sounds.length} sounds: ${sounds.join(", ")}`);
-    }
-    return { contents: [{ uri: "peon-ping://catalog", text: lines.join("\n") }] };
+server.resource("catalog", "peon-ping://catalog", { description: "All sound packs and their sounds", mimeType: "text/plain" }, () => {
+  const { packs } = loadCatalog();
+  if (!packs.size) return { contents: [{ uri: "peon-ping://catalog", text: "No packs installed." }] };
+  const lines = [`${packs.size} packs. Use play_sound with "pack/SoundName".\n`];
+  for (const [name, manifest] of [...packs].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const sounds = Object.values(manifest.categories || {}).flatMap(c =>
+      (c.sounds || []).map(s => `${name}/${s.file.split("/").pop().replace(/\.\w+$/, "")} ("${s.label}")`)
+    );
+    lines.push(`${name} (${manifest.display_name || name}): ${sounds.join(", ")}`);
   }
-);
+  return { contents: [{ uri: "peon-ping://catalog", text: lines.join("\n") }] };
+});
 
-// ── Resource template: individual pack ─────────────────────────────────────
-
-server.resource(
-  "pack",
-  "peon-ping://pack/{name}",
-  { description: "Sounds in a specific pack, organized by category", mimeType: "text/plain" },
-  (uri, { name }) => {
-    const { packs } = loadCatalog();
-    const manifest = packs.get(name);
-    if (!manifest) return { contents: [{ uri: uri.href, text: `Pack "${name}" not found.` }] };
-
-    const lines = [`${manifest.display_name || name}:\n`];
-    for (const [cat, data] of Object.entries(manifest.categories || {})) {
-      lines.push(`${cat}:`);
-      for (const s of data.sounds || []) {
-        const fname = s.file.split("/").pop().replace(/\.\w+$/, "");
-        lines.push(`  ${name}/${fname} — "${s.label || fname}"`);
-      }
+server.resource("pack", "peon-ping://pack/{name}", { description: "Sounds in a specific pack", mimeType: "text/plain" }, (uri, { name }) => {
+  const manifest = loadCatalog().packs.get(name);
+  if (!manifest) return { contents: [{ uri: uri.href, text: `Pack "${name}" not found.` }] };
+  const lines = [`${manifest.display_name || name}:\n`];
+  for (const [cat, data] of Object.entries(manifest.categories || {})) {
+    lines.push(cat + ":");
+    for (const s of data.sounds || []) {
+      lines.push(`  ${name}/${s.file.split("/").pop().replace(/\.\w+$/, "")} — "${s.label}"`);
     }
-    return { contents: [{ uri: uri.href, text: lines.join("\n") }] };
   }
-);
-
-// ── Tool: play_sound ───────────────────────────────────────────────────────
+  return { contents: [{ uri: uri.href, text: lines.join("\n") }] };
+});
 
 server.tool(
   "play_sound",
-  'Play a game sound effect through the speaker. Use sound keys like "pack/sound" (e.g., "duke_nukem/Groovy", "peon/PeonReady1"). Use sparingly to express mood.',
+  'Play a sound effect. Keys: "pack/sound" (e.g. "duke_nukem/Groovy"). Read the catalog resource for available sounds.',
   {
-    sound: z.string().optional().describe('Sound key in format "pack/sound"'),
-    sounds: z.array(z.string()).optional().describe("Multiple sound keys to play sequentially"),
+    sound: z.string().optional().describe("Sound key"),
+    sounds: z.array(z.string()).optional().describe("Multiple sound keys"),
   },
-  { title: "Play Sound Effect", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  async ({ sound, sounds: soundsArr }) => {
-    const keys = soundsArr || (sound ? [sound] : []);
-    if (keys.length === 0) return { content: [{ type: "text", text: "No sound specified" }] };
-    if (keys.length > 5) return { content: [{ type: "text", text: "Max 5 sounds per call" }] };
+  async ({ sound, sounds: arr }) => {
+    const keys = arr || (sound ? [sound] : []);
+    if (!keys.length) return { content: [{ type: "text", text: "No sound specified." }] };
 
-    const results = [];
-    for (let i = 0; i < keys.length; i++) {
-      const [pack, name] = keys[i].split("/", 2);
-      if (!pack || !name) { results.push(`❌ Invalid: "${keys[i]}"`); continue; }
-      const r = resolveSound(pack, name);
-      if (r.error) { results.push(`❌ ${r.error}`); continue; }
-      if (!existsSync(r.file)) { results.push(`❌ File missing: ${keys[i]}`); continue; }
-      enqueue(r.file, volume);
-      results.push(`🔊 ${keys[i]} ("${r.label}")`);
-    }
+    const results = keys.slice(0, 5).map(key => {
+      const [pack, name] = key.split("/", 2);
+      if (!pack || !name) return `❌ Invalid: "${key}"`;
+      const resolved = resolveSound(pack, name);
+      if (!resolved) return `❌ Not found: "${key}"`;
+      if (!existsSync(resolved.path)) return `❌ Missing file: "${key}"`;
+      enqueue(resolved.path);
+      return `🔊 ${key} ("${resolved.label}")`;
+    });
+
     return { content: [{ type: "text", text: results.join("\n") }] };
   }
 );
 
-// ── Start ──────────────────────────────────────────────────────────────────
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
+await server.connect(new StdioServerTransport());

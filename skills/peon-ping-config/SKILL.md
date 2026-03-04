@@ -34,6 +34,90 @@ The config file is at `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/peon-ping/confi
 2. Edit the relevant field(s) using the Edit tool
 3. Confirm the change to the user
 
+## Common Configuration Examples
+
+### Disable desktop notification popups but keep sounds
+
+**User request:** "Disable desktop notifications"
+
+**Action:**
+Set `desktop_notifications: false` in config
+
+**Result:**
+- ✅ Sounds continue playing (voice reminders)
+- ❌ Desktop notification popups suppressed
+- ✅ Mobile notifications unaffected (separate toggle)
+
+**Alternative CLI command:**
+```bash
+peon notifications off
+# or
+peon popups off
+```
+
+### Adjust volume
+
+**User request:** "Set volume to 30%"
+
+**Action:**
+Set `volume: 0.3` in config
+
+### Enable round-robin pack rotation
+
+**User request:** "Enable round-robin pack rotation with peon and glados"
+
+**Action:**
+Set:
+```json
+{
+  "pack_rotation": ["peon", "glados"],
+  "pack_rotation_mode": "round-robin"
+}
+```
+
+## Directory pack bindings
+
+Permanently associate a sound pack with a working directory so every session in that directory uses the right pack automatically. Uses the `path_rules` config key (array of `{ "pattern": "<glob>", "pack": "<name>" }` objects).
+
+### CLI commands
+
+```bash
+# Bind a pack to the current directory
+peon packs bind <pack>
+# e.g. peon packs bind glados
+# → bound glados to /Users/dan/Frontend
+
+# Bind with a custom glob pattern (matches any dir with that name)
+peon packs bind <pack> --pattern "*/Frontend/*"
+
+# Auto-download a missing pack and bind it
+peon packs bind <pack> --install
+
+# Remove binding for the current directory
+peon packs unbind
+
+# Remove a specific pattern binding
+peon packs unbind --pattern "*/Frontend/*"
+
+# List all bindings (* marks rules matching current directory)
+peon packs bindings
+```
+
+### Manual config
+
+The `path_rules` array in `config.json` can also be edited directly:
+
+```json
+{
+  "path_rules": [
+    { "pattern": "/Users/dan/Frontend/*", "pack": "glados" },
+    { "pattern": "*/backend/*", "pack": "sc_kerrigan" }
+  ]
+}
+```
+
+Patterns use Python `fnmatch` glob syntax. First matching rule wins. Path rules override `default_pack` and `pack_rotation` but are overridden by `session_override` (agentskill) assignments.
+
 ## List available packs
 
 To show available packs, run:

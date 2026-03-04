@@ -34,8 +34,11 @@ if ($args.Count -ge 1 -and $args[0]) {
 }
 
 if (-not $cliMode) {
-    # Hook mode: read JSON from stdin ($Input is reserved, use $stdinJson)
-    $stdinJson = [Console]::In.ReadToEnd()
+    # Hook mode: read JSON from stdin (StreamReader with UTF-8 auto-strips BOM on Windows)
+    $stream = [Console]::OpenStandardInput()
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+    $stdinJson = $reader.ReadToEnd()
+    $reader.Close()
     Write-Log "invoked stdin_len=$($stdinJson.Length)"
 
     try {
@@ -160,12 +163,15 @@ try {
     if (Test-Path $statePath) {
         $state = Get-Content $statePath -Raw | ConvertFrom-Json
     } else {
-        $state = @{}
+        # Use PSCustomObject (not hashtable) so Add-Member works correctly on it
+        $state = [PSCustomObject]@{}
     }
     
     # Ensure session_packs exists
     if (-not $state.session_packs) {
-        $state | Add-Member -NotePropertyName "session_packs" -NotePropertyValue @{} -Force
+        # Use PSCustomObject (not hashtable @{}) so subsequent Add-Member calls correctly
+        # insert key-value entries rather than adding NoteProperties to the hashtable object
+        $state | Add-Member -NotePropertyName "session_packs" -NotePropertyValue ([PSCustomObject]@{}) -Force
     }
     
     # Map this session to the requested pack (new dict format with timestamp)

@@ -122,8 +122,14 @@ s = json.load(open('$TEST_HOME/.claude/settings.json'))
 hooks = s.get('hooks', {})
 for event in ['SessionStart', 'UserPromptSubmit', 'Stop', 'Notification', 'PermissionRequest']:
     assert event in hooks, f'{event} not in hooks'
-    found = any('peon.sh' in h.get('command','') for entry in hooks[event] for h in entry.get('hooks',[]))
-    assert found, f'peon.sh not registered for {event}'
+    # UserPromptSubmit registers BOTH peon.sh (silent_window/user.spam) AND hook-handle-use.sh (slash cmds)
+    if event == 'UserPromptSubmit':
+        cmds = [h.get('command','') for entry in hooks[event] for h in entry.get('hooks',[])]
+        assert any('peon.sh' in c for c in cmds), 'peon.sh not registered for UserPromptSubmit (breaks silent_window/user.spam)'
+        assert any('hook-handle-use' in c for c in cmds), 'hook-handle-use not registered for UserPromptSubmit'
+    else:
+        found = any('peon.sh' in h.get('command','') for entry in hooks[event] for h in entry.get('hooks',[]))
+        assert found, f'peon.sh not registered for {event}'
 print('OK')
 "
 }
@@ -209,8 +215,14 @@ s = json.load(open('$TEST_HOME/.claude/settings.json'))
 hooks = s.get('hooks', {})
 for event in ['SessionStart', 'UserPromptSubmit', 'Stop', 'Notification', 'PermissionRequest']:
     assert event in hooks, f'{event} not in hooks'
-    found = any('peon.sh' in h.get('command','') for entry in hooks[event] for h in entry.get('hooks',[]))
-    assert found, f'peon.sh not registered for {event}'
+    # UserPromptSubmit registers BOTH peon.sh (silent_window/user.spam) AND hook-handle-use.sh (slash cmds)
+    if event == 'UserPromptSubmit':
+        cmds = [h.get('command','') for entry in hooks[event] for h in entry.get('hooks',[])]
+        assert any('peon.sh' in c for c in cmds), 'peon.sh not registered for UserPromptSubmit (breaks silent_window/user.spam)'
+        assert any('hook-handle-use' in c for c in cmds), 'hook-handle-use not registered for UserPromptSubmit'
+    else:
+        found = any('peon.sh' in h.get('command','') for entry in hooks[event] for h in entry.get('hooks',[]))
+        assert found, f'peon.sh not registered for {event}'
 print('OK')
 "
 }
@@ -259,6 +271,16 @@ print('OK')
   [ "$status" -ne 0 ]
   [[ "$output" == *".claude/ not found"* ]]
   rm -rf "$NO_CLAUDE_DIR"
+}
+
+@test "global install creates ~/.claude if it does not exist" {
+  # Simulate a machine where Claude Code was never installed (no ~/.claude)
+  FAKE_HOME="$(mktemp -d)"
+  run env HOME="$FAKE_HOME" CLAUDE_CONFIG_DIR="$FAKE_HOME/.claude" \
+    bash "$CLONE_DIR/install.sh"
+  [ "$status" -eq 0 ]
+  [ -d "$FAKE_HOME/.claude/hooks/peon-ping" ]
+  rm -rf "$FAKE_HOME"
 }
 
 @test "fresh install copies completions.fish" {

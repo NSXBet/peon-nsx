@@ -9,6 +9,7 @@ INIT_LOCAL_CONFIG=false
 INSTALL_ALL=false
 CUSTOM_PACKS=""
 OPENCLAW_MODE=false
+NO_RC=false
 for arg in "$@"; do
   case "$arg" in
     --global) LOCAL_MODE=false ;;
@@ -16,6 +17,7 @@ for arg in "$@"; do
     --openclaw) OPENCLAW_MODE=true ;;
     --init-local-config) INIT_LOCAL_CONFIG=true ;;
     --all) INSTALL_ALL=true ;;
+    --no-rc) NO_RC=true ;;
     --packs=*) CUSTOM_PACKS="${arg#--packs=}" ;;
     --help|-h)
       cat <<'HELPEOF'
@@ -27,6 +29,7 @@ Options:
   --openclaw           Install as OpenClaw skill (~/.openclaw/skills)
   --init-local-config  Create local config only, then exit
   --all                Install all packs
+  --no-rc              Skip .bashrc/.zshrc/fish config modifications
   --packs=<a,b,c>      Install specific packs
 HELPEOF
       exit 0
@@ -37,6 +40,20 @@ done
 GLOBAL_BASE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 LOCAL_BASE="$PWD/.claude"
 OPENCLAW_BASE="$HOME/.openclaw"
+
+# Respect no_rc from config.json if --no-rc wasn't passed on CLI
+if [ "$NO_RC" = false ]; then
+  for _cfg in "$GLOBAL_BASE/hooks/peon-ping/config.json" "$LOCAL_BASE/hooks/peon-ping/config.json"; do
+    if [ -f "$_cfg" ]; then
+      _cfg_py="$_cfg"; command -v cygpath &>/dev/null && _cfg_py="$(cygpath -m "$_cfg")"
+      _no_rc=$(python3 -c "import json; print(json.load(open('$_cfg_py')).get('no_rc', False))" 2>/dev/null)
+      if [ "$_no_rc" = "True" ]; then
+        NO_RC=true
+      fi
+      break
+    fi
+  done
+fi
 
 # Auto-detect OpenClaw if present and Claude Code is not
 if [ "$OPENCLAW_MODE" = false ] && [ "$LOCAL_MODE" = false ]; then
@@ -111,10 +128,20 @@ detect_platform() {
       else
         echo "linux"
       fi ;;
+    MSYS_NT*|MINGW*) echo "msys2" ;;
     *) echo "unknown" ;;
   esac
 }
 PLATFORM=$(detect_platform)
+
+# MSYS2/MinGW: Windows Python can't read /c/... paths — convert to C:/... via cygpath
+py_path() {
+  if [ "$PLATFORM" = "msys2" ]; then
+    cygpath -m "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
 
 # --- Detect update vs fresh install ---
 UPDATING=false
@@ -132,8 +159,8 @@ else
 fi
 
 # --- Prerequisites ---
-if [ "$PLATFORM" != "mac" ] && [ "$PLATFORM" != "wsl" ] && [ "$PLATFORM" != "linux" ] && [ "$PLATFORM" != "devcontainer" ] && [ "$PLATFORM" != "ssh" ]; then
-  echo "Error: peon-ping requires macOS, Linux, WSL, SSH, or a devcontainer"
+if [ "$PLATFORM" != "mac" ] && [ "$PLATFORM" != "wsl" ] && [ "$PLATFORM" != "linux" ] && [ "$PLATFORM" != "devcontainer" ] && [ "$PLATFORM" != "ssh" ] && [ "$PLATFORM" != "msys2" ]; then
+  echo "Error: peon-ping requires macOS, Linux, WSL, MSYS2, SSH, or a devcontainer"
   exit 1
 fi
 
@@ -189,19 +216,39 @@ elif [ "$PLATFORM" = "linux" ]; then
   else
     echo "Warning: notify-send not found (libnotify-bin). Desktop notifications will be disabled."
   fi
+elif [ "$PLATFORM" = "msys2" ]; then
+  if ! command -v python3 &>/dev/null; then
+    echo "Error: python3 is required"
+    exit 1
+  fi
+  if ! command -v cygpath &>/dev/null; then
+    echo "Error: cygpath is required (should be built into MSYS2/Git Bash)"
+    exit 1
+  fi
+  MSYS2_PLAYER=""
+  for cmd in ffplay mpv play; do
+    if command -v "$cmd" &>/dev/null; then
+      MSYS2_PLAYER="$cmd"
+      break
+    fi
+  done
+  if [ -n "$MSYS2_PLAYER" ]; then
+    echo "Audio player: $MSYS2_PLAYER"
+  else
+    echo "Audio: PowerShell MediaPlayer fallback (native players like ffplay/mpv preferred for lower latency)"
+  fi
 fi
 
 if [ ! -d "$BASE_DIR" ]; then
   if [ "$LOCAL_MODE" = true ]; then
     echo "Error: .claude/ not found in current directory. Is this a Claude Code project?"
     exit 1
-  elif [ "$PLATFORM" = "devcontainer" ] || [ "$PLATFORM" = "ssh" ]; then
-    # In devcontainers/SSH, Claude Code isn't installed locally - create the directory
-    echo "Creating $BASE_DIR for remote session..."
-    mkdir -p "$BASE_DIR"
   else
-    echo "Error: $BASE_DIR not found. Is Claude Code installed?"
-    exit 1
+    # ~/.claude doesn't exist yet — create it so peon-ping has a home.
+    # This is normal when using peon-ping with non-Claude-Code editors
+    # (e.g. GitHub Copilot, Cursor) where ~/.claude was never created.
+    echo "Creating $BASE_DIR..."
+    mkdir -p "$BASE_DIR"
   fi
 fi
 
@@ -217,7 +264,7 @@ remove_existing_install() {
 import json
 import os
 
-path = '$target_settings'
+path = '$(py_path "$target_settings")'
 try:
     with open(path) as f:
         settings = json.load(f)
@@ -295,6 +342,11 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "bash" ]; then
   fi
 fi
 
+# --- Python-safe path variants (MSYS2 Windows Python needs C:/... not /c/...) ---
+INSTALL_DIR_PY="$(py_path "$INSTALL_DIR")"
+GLOBAL_BASE_PY="$(py_path "$GLOBAL_BASE")"
+LOCAL_BASE_PY="$(py_path "$LOCAL_BASE")"
+
 # --- Install/update core tool files ---
 mkdir -p "$INSTALL_DIR"
 
@@ -338,13 +390,18 @@ else
   curl -fsSL "$REPO_BASE/adapters/cursor.sh" -o "$INSTALL_DIR/adapters/cursor.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/adapters/kiro.sh" -o "$INSTALL_DIR/adapters/kiro.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/adapters/antigravity.sh" -o "$INSTALL_DIR/adapters/antigravity.sh" 2>/dev/null || true
+  curl -fsSL "$REPO_BASE/adapters/gemini.sh" -o "$INSTALL_DIR/adapters/gemini.sh" 2>/dev/null || true
+  curl -fsSL "$REPO_BASE/adapters/openclaw.sh" -o "$INSTALL_DIR/adapters/openclaw.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/adapters/opencode.sh" -o "$INSTALL_DIR/adapters/opencode.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/adapters/windsurf.sh" -o "$INSTALL_DIR/adapters/windsurf.sh" 2>/dev/null || true
+  curl -fsSL "$REPO_BASE/adapters/kimi.sh" -o "$INSTALL_DIR/adapters/kimi.sh" 2>/dev/null || true
   mkdir -p "$INSTALL_DIR/scripts"
   curl -fsSL "$REPO_BASE/scripts/hook-handle-use.sh" -o "$INSTALL_DIR/scripts/hook-handle-use.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/scripts/hook-handle-use.ps1" -o "$INSTALL_DIR/scripts/hook-handle-use.ps1" 2>/dev/null || true
+  curl -fsSL "$REPO_BASE/scripts/hook-handle-rename.sh" -o "$INSTALL_DIR/scripts/hook-handle-rename.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/scripts/pack-download.sh" -o "$INSTALL_DIR/scripts/pack-download.sh" 2>/dev/null || true
   curl -fsSL "$REPO_BASE/scripts/mac-overlay.js" -o "$INSTALL_DIR/scripts/mac-overlay.js" 2>/dev/null || true
+  curl -fsSL "$REPO_BASE/scripts/notify.sh" -o "$INSTALL_DIR/scripts/notify.sh" 2>/dev/null || true
   mkdir -p "$INSTALL_DIR/docs"
   curl -fsSL "$REPO_BASE/docs/peon-icon.png" -o "$INSTALL_DIR/docs/peon-icon.png" 2>/dev/null || true
   if [ "$UPDATING" = false ]; then
@@ -368,9 +425,9 @@ if [ "$UPDATING" = true ] && [ -f "$INSTALL_DIR/config.json" ]; then
 import json, sys
 
 try:
-    with open('$DEFAULT_CFG') as f:
+    with open('$(py_path "$DEFAULT_CFG")') as f:
         defaults = json.load(f)
-    with open('$INSTALL_DIR/config.json') as f:
+    with open('$INSTALL_DIR_PY/config.json') as f:
         user_cfg = json.load(f)
 except Exception:
     sys.exit(0)
@@ -392,6 +449,21 @@ if changed:
   fi
 fi
 
+# --- Persist --no-rc preference to config ---
+if [ "$NO_RC" = true ] && [ -f "$INSTALL_DIR/config.json" ]; then
+  python3 -c "
+import json
+path = '$INSTALL_DIR_PY/config.json'
+with open(path) as f:
+    cfg = json.load(f)
+if not cfg.get('no_rc', False):
+    cfg['no_rc'] = True
+    with open(path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+        f.write('\n')
+" 2>/dev/null || true
+fi
+
 # --- Download sound packs via shared engine ---
 PACK_DL="$INSTALL_DIR/scripts/pack-download.sh"
 chmod +x "$PACK_DL" 2>/dev/null || true
@@ -407,7 +479,9 @@ fi
 chmod +x "$INSTALL_DIR/peon.sh"
 chmod +x "$INSTALL_DIR/relay.sh"
 chmod +x "$INSTALL_DIR/scripts/hook-handle-use.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/scripts/hook-handle-rename.sh" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/scripts/pack-download.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/scripts/notify.sh" 2>/dev/null || true
 
 # --- Build peon-play (macOS Sound Effects device support) ---
 if [ "$PLATFORM" = "mac" ] && command -v swiftc &>/dev/null; then
@@ -422,6 +496,22 @@ if [ "$PLATFORM" = "mac" ] && command -v swiftc &>/dev/null; then
       -framework AVFoundation -framework CoreAudio -framework AudioToolbox 2>/dev/null \
       && echo "  peon-play built successfully" \
       || echo "  Warning: could not build peon-play, using afplay fallback"
+  fi
+fi
+
+# --- Build meeting-detect (macOS mic-in-use detection) ---
+if [ "$PLATFORM" = "mac" ] && command -v swiftc &>/dev/null; then
+  MEETING_DETECT_SRC="$INSTALL_DIR/scripts/meeting-detect.swift"
+  if [ ! -f "$MEETING_DETECT_SRC" ] && [ -z "$SCRIPT_DIR" ]; then
+    curl -fsSL "$REPO_BASE/scripts/meeting-detect.swift" -o "$MEETING_DETECT_SRC" 2>/dev/null || true
+  fi
+  if [ -f "$MEETING_DETECT_SRC" ]; then
+    echo "Building meeting-detect (mic-in-use detection)..."
+    swiftc -O -o "$INSTALL_DIR/scripts/meeting-detect" \
+      "$MEETING_DETECT_SRC" \
+      -framework CoreAudio 2>/dev/null \
+      && echo "  meeting-detect built successfully" \
+      || echo "  Warning: could not build meeting-detect, using process-based fallback"
   fi
 fi
 
@@ -495,7 +585,7 @@ elif [ -z "$SCRIPT_DIR" ]; then
   # Parse manifest to download all trainer sounds
   python3 -c "
 import json, sys
-m = json.load(open('$TRAINER_DIR/manifest.json'))
+m = json.load(open('$(py_path "$TRAINER_DIR")/manifest.json'))
 for cat in m.values():
     for s in cat:
         print(s['file'])
@@ -508,8 +598,8 @@ else
   echo "Warning: trainer/ not found in local clone, skipping trainer install"
 fi
 
-# --- Add shell alias (global install only) ---
-if [ "$LOCAL_MODE" = false ]; then
+# --- Add shell alias (global install only, unless --no-rc) ---
+if [ "$LOCAL_MODE" = false ] && [ "$NO_RC" = false ]; then
   ALIAS_LINE="alias peon=\"bash $INSTALL_DIR/peon.sh\""
   for rcfile in "$HOME/.zshrc" "$HOME/.bashrc"; do
     if [ -f "$rcfile" ] && [ -w "$rcfile" ] && ! grep -qF 'alias peon=' "$rcfile"; then
@@ -533,23 +623,25 @@ if [ "$LOCAL_MODE" = false ]; then
 fi
 
 # --- Add fish shell function + completions ---
-FISH_CONFIG="$HOME/.config/fish/config.fish"
-if [ -f "$FISH_CONFIG" ] && [ -w "$FISH_CONFIG" ]; then
-  FISH_FUNC="function peon; bash $INSTALL_DIR/peon.sh \$argv; end"
-  if ! grep -qF 'function peon' "$FISH_CONFIG"; then
-    echo "" >> "$FISH_CONFIG"
-    echo "# peon-ping quick controls" >> "$FISH_CONFIG"
-    echo "$FISH_FUNC" >> "$FISH_CONFIG"
-    echo "Added peon function to config.fish"
+if [ "$NO_RC" = false ]; then
+  FISH_CONFIG="$HOME/.config/fish/config.fish"
+  if [ -f "$FISH_CONFIG" ] && [ -w "$FISH_CONFIG" ]; then
+    FISH_FUNC="function peon; bash $INSTALL_DIR/peon.sh \$argv; end"
+    if ! grep -qF 'function peon' "$FISH_CONFIG"; then
+      echo "" >> "$FISH_CONFIG"
+      echo "# peon-ping quick controls" >> "$FISH_CONFIG"
+      echo "$FISH_FUNC" >> "$FISH_CONFIG"
+      echo "Added peon function to config.fish"
+    fi
+  elif [ -f "$FISH_CONFIG" ] && [ ! -w "$FISH_CONFIG" ]; then
+    echo "Warning: config.fish is not writable, skipping fish function" >&2
   fi
-elif [ -f "$FISH_CONFIG" ] && [ ! -w "$FISH_CONFIG" ]; then
-  echo "Warning: config.fish is not writable, skipping fish function" >&2
-fi
-FISH_COMPLETIONS_DIR="$HOME/.config/fish/completions"
-if [ -d "$HOME/.config/fish" ]; then
-  mkdir -p "$FISH_COMPLETIONS_DIR"
-  cp "$INSTALL_DIR/completions.fish" "$FISH_COMPLETIONS_DIR/peon.fish"
-  echo "Installed fish completions to $FISH_COMPLETIONS_DIR/peon.fish"
+  FISH_COMPLETIONS_DIR="$HOME/.config/fish/completions"
+  if [ -d "$HOME/.config/fish" ]; then
+    mkdir -p "$FISH_COMPLETIONS_DIR"
+    cp "$INSTALL_DIR/completions.fish" "$FISH_COMPLETIONS_DIR/peon.fish"
+    echo "Installed fish completions to $FISH_COMPLETIONS_DIR/peon.fish"
+  fi
 fi
 
 # --- Verify sounds are installed ---
@@ -676,8 +768,8 @@ HOOK_SETTINGS="$GLOBAL_BASE/settings.json"
 python3 -c "
 import json, os, sys
 
-settings_path = '$HOOK_SETTINGS'
-hook_cmd = '$HOOK_CMD'
+settings_path = '$(py_path "$HOOK_SETTINGS")'
+hook_cmd = '$(py_path "$HOOK_CMD")'
 
 # Load existing settings
 if os.path.exists(settings_path):
@@ -687,6 +779,18 @@ else:
     settings = {}
 
 hooks = settings.setdefault('hooks', {})
+
+# Preserve existing command path if it resolves to the installed file
+installed = os.path.realpath(hook_cmd)
+for entries in hooks.values():
+    for entry in entries:
+        for hk in entry.get('hooks', []):
+            cmd = hk.get('command', '')
+            if 'peon-ping/' in cmd and cmd.endswith('/peon.sh'):
+                resolved = os.path.realpath(os.path.expanduser(cmd))
+                if resolved == installed:
+                    hook_cmd = cmd
+                break
 
 peon_hook_sync = {
     'type': 'command',
@@ -703,7 +807,7 @@ peon_hook_async = {
 # SessionStart runs sync so stderr messages (update notice, pause status,
 # relay guidance) appear immediately. All other events run async.
 sync_events = ('SessionStart',)
-events = ['SessionStart', 'SessionEnd', 'SubagentStart', 'Stop', 'Notification', 'PermissionRequest', 'PostToolUseFailure', 'PreCompact']
+events = ['SessionStart', 'SessionEnd', 'SubagentStart', 'UserPromptSubmit', 'Stop', 'Notification', 'PermissionRequest', 'PostToolUseFailure', 'PreCompact']
 
 # PostToolUseFailure only triggers on Bash failures — use matcher to limit scope
 bash_only_events = ('PostToolUseFailure',)
@@ -736,15 +840,17 @@ with open(settings_path, 'w') as f:
 print('Hooks registered for: ' + ', '.join(events))
 "
 
-# Register UserPromptSubmit hook for /peon-ping-use command
+# Register UserPromptSubmit hooks for /peon-ping-use and /peon-ping-rename commands
 # (Claude Code uses UserPromptSubmit; Cursor uses beforeSubmitPrompt — see below)
 BEFORE_SUBMIT_HOOK="$GLOBAL_BASE/hooks/peon-ping/scripts/hook-handle-use.sh"
+RENAME_HOOK="$GLOBAL_BASE/hooks/peon-ping/scripts/hook-handle-rename.sh"
 
 python3 -c "
 import json, os, sys
 
-settings_path = '$HOOK_SETTINGS'
-hook_cmd = '$BEFORE_SUBMIT_HOOK'
+settings_path = '$(py_path "$HOOK_SETTINGS")'
+hook_cmd = '$(py_path "$BEFORE_SUBMIT_HOOK")'
+rename_cmd = '$(py_path "$RENAME_HOOK")'
 
 # Load existing settings
 if os.path.exists(settings_path):
@@ -755,25 +861,36 @@ else:
 
 hooks = settings.setdefault('hooks', {})
 
-# Create UserPromptSubmit hook entry for /peon-ping-use handler
-before_submit_hook = {
-    'type': 'command',
-    'command': hook_cmd,
-    'timeout': 5
-}
+# Preserve existing command path if it resolves to the installed file
+installed_use = os.path.realpath(hook_cmd)
+installed_rename = os.path.realpath(rename_cmd)
+for entries in hooks.values():
+    for entry in entries:
+        for hk in entry.get('hooks', []):
+            cmd = hk.get('command', '')
+            if 'peon-ping/' in cmd and '/hook-handle-use' in cmd:
+                if os.path.realpath(os.path.expanduser(cmd)) == installed_use:
+                    hook_cmd = cmd
+            if 'peon-ping/' in cmd and '/hook-handle-rename' in cmd:
+                if os.path.realpath(os.path.expanduser(cmd)) == installed_rename:
+                    rename_cmd = cmd
 
+# Create UserPromptSubmit hook entries for command handlers
 before_submit_entry = {
     'matcher': '',
-    'hooks': [before_submit_hook]
+    'hooks': [
+        {'type': 'command', 'command': hook_cmd, 'timeout': 5},
+        {'type': 'command', 'command': rename_cmd, 'timeout': 5},
+    ]
 }
 
 # Register under UserPromptSubmit (valid Claude Code event)
 event_hooks = hooks.get('UserPromptSubmit', [])
-# Remove any existing handle-use entries (keep peon.sh entries)
+# Remove any existing hook-handle-use/rename entries (keep peon.sh entries)
 event_hooks = [
     h for h in event_hooks
     if not any(
-        'hook-handle-use.sh' in hk.get('command', '')
+        'hook-handle-use' in hk.get('command', '') or 'hook-handle-rename' in hk.get('command', '')
         for hk in h.get('hooks', [])
     )
 ]
@@ -790,7 +907,7 @@ with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2)
     f.write('\n')
 
-print('UserPromptSubmit hook registered for /peon-ping-use command')
+print('UserPromptSubmit hooks registered for /peon-ping-use and /peon-ping-rename commands')
 "
 
 # Register beforeSubmitPrompt hook for Cursor IDE if ~/.cursor exists
@@ -805,8 +922,8 @@ if [ -d "$CURSOR_DIR" ]; then
   python3 -c "
 import json, os
 
-hooks_file = '$CURSOR_HOOKS_FILE'
-hook_cmd = '$CURSOR_HOOK_CMD'
+hooks_file = '$(py_path "$CURSOR_HOOKS_FILE")'
+hook_cmd = '$(py_path "$CURSOR_HOOK_CMD")'
 
 # Load or create hooks.json
 if os.path.exists(hooks_file):
@@ -823,6 +940,27 @@ if 'hooks' not in data:
 
 hooks = data['hooks']
 
+# Preserve existing command path if it resolves to the installed file
+installed = os.path.realpath(hook_cmd)
+def _find_existing(hooks_data, suffix):
+    if isinstance(hooks_data, list):
+        for h in hooks_data:
+            cmd = h.get('command', '')
+            if 'peon-ping/' in cmd and cmd.endswith(suffix):
+                yield cmd
+    elif isinstance(hooks_data, dict):
+        for entries in hooks_data.values():
+            for h in (entries if isinstance(entries, list) else []):
+                cmd = h.get('command', '')
+                if 'peon-ping/' in cmd and cmd.endswith(suffix):
+                    yield cmd
+
+for cmd in _find_existing(hooks, '/hook-handle-use'):
+    resolved = os.path.realpath(os.path.expanduser(cmd))
+    if resolved == installed:
+        hook_cmd = cmd
+        break
+
 # Create beforeSubmitPrompt hook entry (Cursor format)
 before_submit_hook = {
     'command': hook_cmd,
@@ -831,10 +969,10 @@ before_submit_hook = {
 
 # Handle both flat-array format [{event, command}] and dict format {event: [{command}]}
 if isinstance(hooks, list):
-    # Flat array format: remove existing handle-use entries for this event
+    # Flat array format: remove existing peon-ping entries for this event
     hooks = [
         h for h in hooks
-        if not (h.get('event') == 'beforeSubmitPrompt' and 'hook-handle-use.sh' in h.get('command', ''))
+        if not (h.get('event') == 'beforeSubmitPrompt' and 'peon-ping/' in h.get('command', ''))
     ]
     before_submit_hook['event'] = 'beforeSubmitPrompt'
     hooks.append(before_submit_hook)
@@ -843,7 +981,7 @@ else:
     event_hooks = hooks.get('beforeSubmitPrompt', [])
     event_hooks = [
         h for h in event_hooks
-        if 'hook-handle-use.sh' not in h.get('command', '')
+        if 'peon-ping' not in h.get('command', '')
     ]
     event_hooks.append(before_submit_hook)
     hooks['beforeSubmitPrompt'] = event_hooks
@@ -861,6 +999,14 @@ print('Cursor beforeSubmitPrompt hook registered')
 "
 fi
 
+# --- Auto-detect Kimi Code CLI and start watcher daemon ---
+KIMI_DIR="$HOME/.kimi"
+if [ -d "$KIMI_DIR" ]; then
+  echo ""
+  echo "Detected Kimi Code CLI installation, starting adapter..."
+  bash "$INSTALL_DIR/adapters/kimi.sh" --install
+fi
+
 # --- Remove peon-ping hooks from project-level settings to prevent doubles ---
 # Since hooks are always written to global settings now, clean any stale
 # project-level hooks that may exist from older installs.
@@ -870,7 +1016,7 @@ if [ -f "$OTHER_SETTINGS" ] && [ "$OTHER_SETTINGS" != "$HOOK_SETTINGS" ]; then
   python3 -c "
 import json, os
 
-path = '$OTHER_SETTINGS'
+path = '$(py_path "$OTHER_SETTINGS")'
 try:
     with open(path) as f:
         settings = json.load(f)
@@ -882,7 +1028,7 @@ changed = False
 for event, entries in list(hooks.items()):
     filtered = [
         e for e in entries
-        if not any('peon-ping/peon.sh' in h.get('command', '') for h in e.get('hooks', []))
+        if not any('peon-ping/' in h.get('command', '') for h in e.get('hooks', []))
     ]
     if len(filtered) != len(entries):
         hooks[event] = filtered
@@ -918,7 +1064,7 @@ else
   ACTIVE_PACK=$(python3 -c "
 import json
 try:
-    c = json.load(open('$INSTALL_DIR/config.json'))
+    c = json.load(open('$INSTALL_DIR_PY/config.json'))
     print(c.get('active_pack', 'peon'))
 except Exception:
     print('peon')
@@ -930,7 +1076,7 @@ except Exception:
       USE_SFX=$(python3 -c "
 import json
 try:
-    c = json.load(open('$INSTALL_DIR/config.json'))
+    c = json.load(open('$INSTALL_DIR_PY/config.json'))
     print(str(c.get('use_sound_effects_device', True)).lower())
 except Exception:
     print('true')
@@ -965,6 +1111,17 @@ except Exception:
         mpv --no-video --volume=30 "$TEST_SOUND" 2>/dev/null
       elif command -v aplay &>/dev/null; then
         aplay -q "$TEST_SOUND" 2>/dev/null
+      fi
+    elif [ "$PLATFORM" = "msys2" ]; then
+      if command -v ffplay &>/dev/null; then
+        ffplay -nodisp -autoexit -volume 30 "$TEST_SOUND" 2>/dev/null
+      elif command -v mpv &>/dev/null; then
+        mpv --no-video --volume=30 "$TEST_SOUND" 2>/dev/null
+      elif command -v play &>/dev/null; then
+        play -v 0.3 "$TEST_SOUND" 2>/dev/null
+      else
+        wpath=$(cygpath -w "$TEST_SOUND")
+        powershell.exe -NoProfile -NonInteractive -File "$(cygpath -w "$INSTALL_DIR/scripts/win-play.ps1")" -path "$wpath" -vol 0.3 2>/dev/null
       fi
     fi
     echo "Sound working!"

@@ -5,6 +5,18 @@ set -euo pipefail
 
 REGISTRY_URL="https://nsxbet.github.io/registry/index.json"
 
+# MSYS2/MinGW: Windows Python can't read /c/... paths — convert to C:/... via cygpath
+_IS_MSYS2=false
+case "$(uname -s)" in MSYS_NT*|MINGW*) _IS_MSYS2=true ;; esac
+
+py_path() {
+  if [ "$_IS_MSYS2" = true ]; then
+    cygpath -m "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 # Fallback pack list (used if registry is unreachable)
 FALLBACK_PACKS="acolyte_de acolyte_ru aoe2 aom_greek brewmaster_ru dota2_axe duke_nukem glados hd2_helldiver molag_bal murloc ocarina_of_time peon peon_cz peon_de peon_es peon_fr peon_pl peon_ru peasant peasant_cz peasant_es peasant_fr peasant_ru ra2_kirov ra2_soviet_engineer ra_soviet rick sc_battlecruiser sc_firebat sc_kerrigan sc_medic sc_scv sc_tank sc_terran sc_vessel sheogorath sopranos tf2_engineer wc2_peasant"
 FALLBACK_REPO="PeonPing/og-packs"
@@ -44,12 +56,15 @@ is_safe_source_path() {
 }
 
 is_safe_filename() {
-  [[ "$1" =~ ^[A-Za-z0-9._?!-]+$ ]]
+  [[ "$1" =~ ^[A-Za-z0-9._?!\ \(\)/-]+$ ]] && [[ "$1" != *".."* ]] && [[ "$1" != /* ]]
 }
 
-# URL-encode characters that break raw GitHub URLs (e.g. ? in filenames)
+# URL-encode characters that break raw GitHub URLs (e.g. ? or spaces in filenames)
 urlencode_filename() {
   local f="$1"
+  f="${f// /%20}"
+  f="${f//\(/%28}"
+  f="${f//\)/%29}"
   f="${f//\?/%3F}"
   f="${f//\!/%21}"
   f="${f//\#/%23}"
@@ -66,7 +81,7 @@ file_sha256() {
     sha256sum "$1" 2>/dev/null | cut -d' ' -f1
   else
     # fallback: use python
-    python3 -c "import hashlib; print(hashlib.sha256(open('$1','rb').read()).hexdigest())" 2>/dev/null
+    python3 -c "import hashlib; print(hashlib.sha256(open('$(py_path "$1")','rb').read()).hexdigest())" 2>/dev/null
   fi
 }
 
@@ -149,7 +164,7 @@ for p in data.get('packs', []):
 if [ "$LIST_REGISTRY" = true ]; then
   fetch_registry
   if [ -n "$REGISTRY_JSON" ]; then
-    PEON_DIR="$PEON_DIR" python3 -c "
+    PEON_DIR="$(py_path "$PEON_DIR")" python3 -c "
 import json, sys, os
 
 registry = json.loads(sys.stdin.read())
@@ -279,13 +294,20 @@ for p in data.get('packs', []):
 
   # Download sound files
   manifest="$PEON_DIR/packs/$pack/openpeon.json"
+  manifest_py="$(py_path "$manifest")"
   SOUND_COUNT=$(python3 -c "
-import json, os
-m = json.load(open('$manifest'))
+import json, posixpath
+m = json.load(open('$manifest_py'))
 seen = set()
 for cat in m.get('categories', {}).values():
     for s in cat.get('sounds', []):
-        seen.add(os.path.basename(s['file']))
+        f = s['file']
+        # Strip leading 'sounds/' to get relative path; fall back to basename
+        if f.startswith('sounds/'):
+            rel = f[len('sounds/'):]
+        else:
+            rel = posixpath.basename(f)
+        seen.add(rel)
 print(len(seen))
 " 2>/dev/null || echo "?")
 
@@ -303,6 +325,7 @@ print(len(seen))
         echo "  Warning: skipped unsafe filename in $pack: $sfile" >&2
         continue
       fi
+      mkdir -p "$PEON_DIR/packs/$pack/sounds/$(dirname "$sfile")"
       if is_cached_valid "$PEON_DIR/packs/$pack/sounds/$sfile" "$CHECKSUMS_FILE" "$sfile"; then
         local_file_count=$((local_file_count + 1))
         fsize=$(wc -c < "$PEON_DIR/packs/$pack/sounds/$sfile" | tr -d ' ')
@@ -319,16 +342,19 @@ print(len(seen))
       draw_progress "$PACK_INDEX" "$TOTAL_PACKS" "$pack" \
         "$local_file_count" "$SOUND_COUNT" "$local_byte_count"
     done < <(python3 -c "
-import json, os
-m = json.load(open('$manifest'))
+import json, posixpath
+m = json.load(open('$manifest_py'))
 seen = set()
 for cat in m.get('categories', {}).values():
     for s in cat.get('sounds', []):
         f = s['file']
-        basename = os.path.basename(f)
-        if basename not in seen:
-            seen.add(basename)
-            print(basename)
+        if f.startswith('sounds/'):
+            rel = f[len('sounds/'):]
+        else:
+            rel = posixpath.basename(f)
+        if rel not in seen:
+            seen.add(rel)
+            print(rel)
 ")
 
     draw_progress "$PACK_INDEX" "$TOTAL_PACKS" "$pack" \
@@ -342,21 +368,25 @@ for cat in m.get('categories', {}).values():
     printf "  [%d/%d] %s " "$PACK_INDEX" "$TOTAL_PACKS" "$pack"
 
     python3 -c "
-import json, os
-m = json.load(open('$manifest'))
+import json, posixpath
+m = json.load(open('$manifest_py'))
 seen = set()
 for cat in m.get('categories', {}).values():
     for s in cat.get('sounds', []):
         f = s['file']
-        basename = os.path.basename(f)
-        if basename not in seen:
-            seen.add(basename)
-            print(basename)
+        if f.startswith('sounds/'):
+            rel = f[len('sounds/'):]
+        else:
+            rel = posixpath.basename(f)
+        if rel not in seen:
+            seen.add(rel)
+            print(rel)
 " | while read -r sfile; do
       if ! is_safe_filename "$sfile"; then
         echo "  Warning: skipped unsafe filename in $pack: $sfile" >&2
         continue
       fi
+      mkdir -p "$PEON_DIR/packs/$pack/sounds/$(dirname "$sfile")"
       if is_cached_valid "$PEON_DIR/packs/$pack/sounds/$sfile" "$CHECKSUMS_FILE" "$sfile"; then
         printf "."
       elif curl -fsSL "$PACK_BASE/sounds/$(urlencode_filename "$sfile")" -o "$PEON_DIR/packs/$pack/sounds/$sfile" </dev/null 2>/dev/null; then

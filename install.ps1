@@ -1,6 +1,6 @@
 # peon-ping Windows Installer
 # Native Windows port - plays Warcraft III Peon sounds when Claude Code needs attention
-# Usage: powershell -ExecutionPolicy Bypass -File install.ps1
+# Usage: powershell -File install.ps1
 # Originally made by https://github.com/SpamsRevenge in https://github.com/NSXBet/peon-nsx/issues/94
 
 param(
@@ -22,6 +22,17 @@ function Test-SafeSourceRef($n)   { $n -match '^[A-Za-z0-9._/-]+$' -and $n -notm
 function Test-SafeSourcePath($n)  { $n -match '^[A-Za-z0-9._/-]+$' -and $n -notmatch '\.\.' -and $n[0] -ne '/' }
 function Test-SafeFilename($n)    { $n -match '^[A-Za-z0-9._-]+$' }
 
+# Returns raw config JSON with locale-damaged decimals fixed (e.g. "volume": 0,5 -> 0.5).
+# Also repairs missing volume value (e.g. "volume":\n "pack_rotation_mode" from a failed write).
+# Use before ConvertFrom-Json so config parses on systems where decimal separator is comma.
+function Get-PeonConfigRaw {
+    param([string]$Path)
+    $raw = Get-Content $Path -Raw
+    $raw = $raw -replace '"volume"\s*:\s*(\d),(\d+)', '"volume": $1.$2'
+    $raw = $raw -replace '"volume"\s*:\s*\r?\n(\s*)"', '"volume": 0.5,$1"'
+    return $raw
+}
+
 # --- Fallback pack list (used when registry is unreachable) ---
 $FallbackPacks = @("acolyte_de", "acolyte_ru", "aoe2", "aom_greek", "brewmaster_ru", "dota2_axe", "duke_nukem", "glados", "hd2_helldiver", "molag_bal", "murloc", "ocarina_of_time", "peon", "peon_cz", "peon_de", "peon_es", "peon_fr", "peon_pl", "peon_ru", "peasant", "peasant_cz", "peasant_es", "peasant_fr", "peasant_ru", "ra2_kirov", "ra2_soviet_engineer", "ra_soviet", "rick", "sc_battlecruiser", "sc_firebat", "sc_kerrigan", "sc_medic", "sc_scv", "sc_tank", "sc_terran", "sc_vessel", "sheogorath", "sopranos", "tf2_engineer", "wc2_peasant")
 $FallbackRepo = "PeonPing/og-packs"
@@ -29,6 +40,14 @@ $FallbackRef = "v1.1.0"
 
 Write-Host "=== peon-ping Windows installer ===" -ForegroundColor Cyan
 Write-Host ""
+
+# --- Execution policy detection ---
+$policy = Get-ExecutionPolicy -Scope CurrentUser
+if ($policy -eq "Restricted") {
+    Write-Host "Warning: PowerShell execution policy is 'Restricted'." -ForegroundColor Yellow
+    Write-Host "Hooks may not run. Fix with: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser" -ForegroundColor Yellow
+    Write-Host ""
+}
 
 
 # --- Paths ---
@@ -45,10 +64,13 @@ if (Test-Path (Join-Path $InstallDir "peon.ps1")) {
     Write-Host "Existing install found. Updating..." -ForegroundColor Yellow
 }
 
+$ClaudeCodeDetected = $true
 if (-not (Test-Path $ClaudeDir)) {
-    Write-Host "Error: $ClaudeDir not found. Is Claude Code installed?" -ForegroundColor Red
-    Write-Host "Install Claude Code first, then run this installer." -ForegroundColor Red
-    exit 1
+    $ClaudeCodeDetected = $false
+    Write-Host "Note: $ClaudeDir not found (Claude Code may not be installed)." -ForegroundColor Yellow
+    Write-Host "Installing adapters and packs only. Claude Code hooks will be skipped." -ForegroundColor Yellow
+    Write-Host ""
+    New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null
 }
 
 # --- Fetch registry ---
@@ -207,8 +229,26 @@ if (-not $Updating) {
         silent_window_seconds = 0
         pack_rotation = @()
         pack_rotation_mode = "random"
-    } | ConvertTo-Json -Depth 3
+    }
+    $prevCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+        $config = $config | ConvertTo-Json -Depth 3
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $prevCulture
+    }
     Set-Content -Path $configPath -Value $config -Encoding UTF8
+}
+
+# --- Normalize config on update (repair invalid/missing volume, locale decimals) ---
+if ($Updating -and (Test-Path $configPath)) {
+    $raw = Get-PeonConfigRaw $configPath
+    try {
+        $null = $raw | ConvertFrom-Json
+    } catch {
+        $raw = $raw -replace '"volume"\s*:\s*\r?\n(\s*)"', '"volume": 0.5,$1"'
+    }
+    Set-Content -Path $configPath -Value $raw -Encoding UTF8
 }
 
 # --- Install state ---
@@ -246,6 +286,10 @@ if (Test-Path $hookHandleUsePs1Source) {
     # Local install: copy from repo
     Copy-Item -Path $hookHandleUsePs1Source -Destination $hookHandleUsePs1Target -Force
     Copy-Item -Path $hookHandleUseShSource -Destination $hookHandleUseShTarget -Force
+    $notifyShSource = Join-Path $ScriptDir "scripts\notify.sh"
+    if (Test-Path $notifyShSource) {
+        Copy-Item -Path $notifyShSource -Destination (Join-Path $scriptsDir "notify.sh") -Force
+    }
 } else {
     # One-liner install: download from GitHub
     try {
@@ -258,6 +302,11 @@ if (Test-Path $hookHandleUsePs1Source) {
     } catch {
         Write-Host "  Warning: Could not download hook-handle-use.sh" -ForegroundColor Yellow
     }
+    try {
+        Invoke-WebRequest -Uri "$RepoBase/scripts/notify.sh" -OutFile (Join-Path $scriptsDir "notify.sh") -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Host "  Warning: Could not download notify.sh" -ForegroundColor Yellow
+    }
 }
 
 # --- Install the main hook script (PowerShell) ---
@@ -267,8 +316,15 @@ $hookScript = @'
 
 param(
     [string]$Command = "",
-    [string]$Arg1 = ""
+    [string]$Arg1 = "",
+    [string]$Arg2 = ""
 )
+
+# Raw config read; repair is done at install/update time, so hook only needs plain read.
+function Get-PeonConfigRaw {
+    param([string]$Path)
+    return Get-Content $Path -Raw
+}
 
 # --- CLI commands ---
 if ($Command) {
@@ -283,7 +339,8 @@ if ($Command) {
 
     switch -Regex ($Command) {
         "^--toggle$" {
-            $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+            $raw = Get-PeonConfigRaw $ConfigPath
+            $cfg = $raw | ConvertFrom-Json
             $newState = -not $cfg.enabled
             $raw = Get-Content $ConfigPath -Raw
             $raw = $raw -replace '"enabled"\s*:\s*(true|false)', "`"enabled`": $($newState.ToString().ToLower())"
@@ -292,14 +349,14 @@ if ($Command) {
             Write-Host "peon-ping: $state" -ForegroundColor Cyan
             return
         }
-        "^--pause$" {
+        "^--(pause|mute)$" {
             $raw = Get-Content $ConfigPath -Raw
             $raw = $raw -replace '"enabled"\s*:\s*(true|false)', '"enabled": false'
             Set-Content $ConfigPath -Value $raw -Encoding UTF8
             Write-Host "peon-ping: PAUSED" -ForegroundColor Yellow
             return
         }
-        "^--resume$" {
+        "^--(resume|unmute)$" {
             $raw = Get-Content $ConfigPath -Raw
             $raw = $raw -replace '"enabled"\s*:\s*(true|false)', '"enabled": true'
             Set-Content $ConfigPath -Value $raw -Encoding UTF8
@@ -308,7 +365,7 @@ if ($Command) {
         }
         "^--status$" {
             try {
-                $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+                $cfg = Get-PeonConfigRaw $ConfigPath | ConvertFrom-Json
                 $state = if ($cfg.enabled) { "ENABLED" } else { "PAUSED" }
                 Write-Host "peon-ping: $state | pack: $($cfg.active_pack) | volume: $($cfg.volume)" -ForegroundColor Cyan
             } catch {
@@ -319,29 +376,77 @@ if ($Command) {
         }
         "^--packs$" {
             $packsDir = Join-Path $InstallDir "packs"
-            $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
-            Write-Host "Available packs:" -ForegroundColor Cyan
-            Get-ChildItem -Path $packsDir -Directory | Sort-Object Name | ForEach-Object {
-                $soundCount = (Get-ChildItem -Path (Join-Path $_.FullName "sounds") -File -ErrorAction SilentlyContinue | Measure-Object).Count
-                if ($soundCount -gt 0) {
-                    $marker = if ($_.Name -eq $cfg.active_pack) { " <-- active" } else { "" }
-                    Write-Host "  $($_.Name) ($soundCount sounds)$marker"
+            $cfg = Get-PeonConfigRaw $ConfigPath | ConvertFrom-Json
+            $available = Get-ChildItem -Path $packsDir -Directory | Where-Object {
+                (Get-ChildItem -Path (Join-Path $_.FullName "sounds") -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+            } | ForEach-Object { $_.Name } | Sort-Object
+
+            switch ($Arg1) {
+                "use" {
+                    if (-not $Arg2) {
+                        Write-Host "Usage: peon packs use <pack-name>" -ForegroundColor Yellow
+                        return
+                    }
+                    $newPack = $Arg2
+                    if ($newPack -notin $available) {
+                        Write-Host "Pack '$newPack' not found. Available: $($available -join ', ')" -ForegroundColor Red
+                        return
+                    }
+                    $raw = Get-Content $ConfigPath -Raw
+                    $raw = $raw -replace '"active_pack"\s*:\s*"[^"]*"', "`"active_pack`": `"$newPack`""
+                    Set-Content $ConfigPath -Value $raw -Encoding UTF8
+                    Write-Host "peon-ping: switched to '$newPack'" -ForegroundColor Green
+                    return
+                }
+                "next" {
+                    $idx = [array]::IndexOf($available, $cfg.active_pack)
+                    $newPack = $available[($idx + 1) % $available.Count]
+                    $raw = Get-Content $ConfigPath -Raw
+                    $raw = $raw -replace '"active_pack"\s*:\s*"[^"]*"', "`"active_pack`": `"$newPack`""
+                    Set-Content $ConfigPath -Value $raw -Encoding UTF8
+                    Write-Host "peon-ping: switched to '$newPack'" -ForegroundColor Green
+                    return
+                }
+                default {
+                    # "list" or no subcommand - show available packs
+                    Write-Host "Available packs:" -ForegroundColor Cyan
+                    foreach ($packName in $available) {
+                        $soundCount = (Get-ChildItem -Path (Join-Path $packsDir "$packName\sounds") -File -ErrorAction SilentlyContinue | Measure-Object).Count
+                        $marker = if ($packName -eq $cfg.active_pack) { " <-- active" } else { "" }
+                        Write-Host "  $packName ($soundCount sounds)$marker"
+                    }
+                    return
                 }
             }
-            return
         }
         "^--pack$" {
-            $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+            $cfg = Get-PeonConfigRaw $ConfigPath | ConvertFrom-Json
             $packsDir = Join-Path $InstallDir "packs"
             $available = Get-ChildItem -Path $packsDir -Directory | Where-Object {
                 (Get-ChildItem -Path (Join-Path $_.FullName "sounds") -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
             } | ForEach-Object { $_.Name } | Sort-Object
 
-            if ($Arg1) {
+            if ($Arg1 -eq "use") {
+                # "peon pack use <name>" - treat Arg2 as the pack name
+                if (-not $Arg2) {
+                    Write-Host "Usage: peon pack use <pack-name>" -ForegroundColor Yellow
+                    return
+                }
+                $newPack = $Arg2
+            } elseif ($Arg1 -eq "next") {
+                # "peon pack next" - cycle to next
+                $idx = [array]::IndexOf($available, $cfg.active_pack)
+                $newPack = $available[($idx + 1) % $available.Count]
+            } elseif ($Arg1) {
                 $newPack = $Arg1
             } else {
                 $idx = [array]::IndexOf($available, $cfg.active_pack)
                 $newPack = $available[($idx + 1) % $available.Count]
+            }
+
+            if ($newPack -notin $available) {
+                Write-Host "Pack '$newPack' not found. Available: $($available -join ', ')" -ForegroundColor Red
+                return
             }
 
             $raw = Get-Content $ConfigPath -Raw
@@ -352,9 +457,10 @@ if ($Command) {
         }
         "^--volume$" {
             if ($Arg1) {
-                $vol = [math]::Max(0, [math]::Min(1, [double]$Arg1))
+                $vol = [math]::Round([math]::Max(0.0, [math]::Min(1.0, [double]::Parse($Arg1.Trim(), [System.Globalization.CultureInfo]::InvariantCulture))), 2)
+                $volStr = $vol.ToString([System.Globalization.CultureInfo]::InvariantCulture)
                 $raw = Get-Content $ConfigPath -Raw
-                $raw = $raw -replace '"volume"\s*:\s*[\d.]+', "`"volume`": $vol"
+                $raw = $raw -replace '"volume"\s*:\s*[\d.,]+', "`"volume`": $volStr"
                 Set-Content $ConfigPath -Value $raw -Encoding UTF8
                 Write-Host "peon-ping: volume set to $vol" -ForegroundColor Green
             } else {
@@ -367,6 +473,8 @@ if ($Command) {
             Write-Host "  --toggle       Toggle enabled/paused"
             Write-Host "  --pause        Pause sounds"
             Write-Host "  --resume       Resume sounds"
+            Write-Host "  --mute         Alias for --pause"
+            Write-Host "  --unmute       Alias for --resume"
             Write-Host "  --status       Show current status"
             Write-Host "  --packs        List available sound packs"
             Write-Host "  --pack [name]  Switch pack (or cycle)"
@@ -385,18 +493,21 @@ $StatePath = Join-Path $InstallDir ".state.json"
 
 # Read config
 try {
-    $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+    $config = Get-PeonConfigRaw $ConfigPath | ConvertFrom-Json
 } catch {
     exit 0
 }
 
 if (-not $config.enabled) { exit 0 }
 
-# Read hook input from stdin
+# Read hook input from stdin (StreamReader with UTF-8 auto-strips BOM on Windows)
 $hookInput = ""
 try {
     if (-not [Console]::IsInputRedirected) { exit 0 }
-    $hookInput = [Console]::In.ReadToEnd()
+    $stream = [Console]::OpenStandardInput()
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+    $hookInput = $reader.ReadToEnd()
+    $reader.Close()
 } catch {
     exit 0
 }
@@ -409,8 +520,23 @@ try {
     exit 0
 }
 
-$hookEvent = $event.hook_event_name
-if (-not $hookEvent) { exit 0 }
+$rawEvent = $event.hook_event_name
+if (-not $rawEvent) { exit 0 }
+
+# Cursor IDE sends camelCase via Third-party skills; Claude Code sends PascalCase.
+# Map to PascalCase so the switch below matches.
+$cursorMap = @{
+    "sessionStart" = "SessionStart"
+    "sessionEnd" = "SessionEnd"
+    "beforeSubmitPrompt" = "UserPromptSubmit"
+    "stop" = "Stop"
+    "preToolUse" = "UserPromptSubmit"
+    "postToolUse" = "Stop"
+    "subagentStop" = "Stop"
+    "subagentStart" = "SubagentStart"
+    "preCompact" = "PreCompact"
+}
+$hookEvent = if ($cursorMap.ContainsKey($rawEvent)) { $cursorMap[$rawEvent] } else { $rawEvent }
 
 # Extract session ID (Claude Code: session_id, Cursor: conversation_id)
 $sessionId = if ($event.session_id) { $event.session_id } elseif ($event.conversation_id) { $event.conversation_id } else { "default" }
@@ -436,8 +562,12 @@ function ConvertTo-Hashtable {
 $state = @{}
 try {
     if (Test-Path $StatePath) {
-        $stateObj = Get-Content $StatePath -Raw | ConvertFrom-Json
-        $state = ConvertTo-Hashtable $stateObj
+        $raw = Get-Content $StatePath -Raw
+        if ($raw -and $raw.Trim().Length -gt 0) {
+            $stateObj = $raw | ConvertFrom-Json
+            $converted = ConvertTo-Hashtable $stateObj
+            if ($converted -is [hashtable]) { $state = $converted }
+        }
     }
 } catch {
     $state = @{}
@@ -555,7 +685,7 @@ if (-not $activePack) { $activePack = "peon" }
 $rotationMode = $config.pack_rotation_mode
 if (-not $rotationMode) { $rotationMode = "random" }
 
-if ($rotationMode -eq "agentskill") {
+if ($rotationMode -eq "agentskill" -or $rotationMode -eq "session_override") {
     # Explicit per-session assignments (from skill)
     $sessionPacks = $state.session_packs
     if (-not $sessionPacks) { $sessionPacks = @{} }
@@ -656,26 +786,84 @@ try {
     $state | ConvertTo-Json -Depth 3 | Set-Content $StatePath -Encoding UTF8
 } catch {}
 
-# --- Play the sound (async) ---
+# --- Play the sound inline ---
 $volume = $config.volume
 if (-not $volume) { $volume = 0.5 }
 
-# Use win-play.ps1 script
-$winPlayScript = Join-Path $InstallDir "scripts\win-play.ps1"
-if (Test-Path $winPlayScript) {
-    $null = Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$winPlayScript,"-path",$soundPath,"-vol",$volume
-}
+# Background jobs are terminated when this short-lived hook process exits.
+# Inline playback is deterministic and keeps behavior consistent.
+try {
+    if ($soundPath -match '\.wav$') {
+        Add-Type -AssemblyName System.Windows.Forms
+        $sp = New-Object System.Media.SoundPlayer $soundPath
+        $sp.PlaySync()
+        $sp.Dispose()
+    } else {
+        Add-Type -AssemblyName PresentationCore
+        $player = New-Object System.Windows.Media.MediaPlayer
+        $player.Open([Uri]::new("file:///$($soundPath -replace '\\','/')"))
+        $player.Volume = $volume
+        Start-Sleep -Milliseconds 150
+        $player.Play()
+        $timeout = 50
+        while ($timeout -gt 0 -and $player.Position.TotalMilliseconds -eq 0) {
+            Start-Sleep -Milliseconds 100
+            $timeout--
+        }
+        if ($player.NaturalDuration.HasTimeSpan) {
+            $remaining = $player.NaturalDuration.TimeSpan.TotalMilliseconds - $player.Position.TotalMilliseconds
+            if ($remaining -gt 0 -and $remaining -lt 5000) {
+                Start-Sleep -Milliseconds ([int]$remaining + 100)
+            }
+        } else {
+            Start-Sleep -Seconds 2
+        }
+        $player.Close()
+    }
+} catch {}
 
 exit 0
 '@
 
 $hookScriptPath = Join-Path $InstallDir "peon.ps1"
 Set-Content -Path $hookScriptPath -Value $hookScript -Encoding UTF8
+Unblock-File -Path $hookScriptPath -ErrorAction SilentlyContinue
+
+# --- Install adapter scripts ---
+Write-Host "  Installing adapter scripts..."
+$adaptersDir = Join-Path $InstallDir "adapters"
+New-Item -ItemType Directory -Path $adaptersDir -Force | Out-Null
+
+$adapterFiles = @(
+    "codex.ps1", "gemini.ps1", "copilot.ps1", "windsurf.ps1",
+    "kiro.ps1", "openclaw.ps1", "amp.ps1", "antigravity.ps1",
+    "kimi.ps1", "opencode.ps1", "kilo.ps1"
+)
+
+$sourceAdaptersDir = Join-Path $ScriptDir "adapters"
+foreach ($adapterFile in $adapterFiles) {
+    $destPath = Join-Path $adaptersDir $adapterFile
+    $sourcePath = Join-Path $sourceAdaptersDir $adapterFile
+    if (Test-Path $sourcePath) {
+        # Local install: copy from repo
+        Copy-Item $sourcePath $destPath -Force
+    } else {
+        # One-liner install: download from GitHub
+        try {
+            Invoke-WebRequest -Uri "$RepoBase/adapters/$adapterFile" -OutFile $destPath -UseBasicParsing -ErrorAction Stop
+        } catch {
+            Write-Host "  Warning: Could not download adapter $adapterFile" -ForegroundColor Yellow
+            continue
+        }
+    }
+    Unblock-File -Path $destPath -ErrorAction SilentlyContinue
+}
+Write-Host "  Installed $($adapterFiles.Count) adapter scripts to $adaptersDir"
 
 # --- Install CLI shortcut ---
 $peonCli = @"
 @echo off
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& '%USERPROFILE%\.claude\hooks\peon-ping\peon.ps1' %*"
+powershell -NoProfile -NonInteractive -Command "& '%USERPROFILE%\.claude\hooks\peon-ping\peon.ps1' %*"
 "@
 $cliBinDir = Join-Path $env:USERPROFILE ".local\bin"
 if (-not (Test-Path $cliBinDir)) {
@@ -692,7 +880,7 @@ $peonPs1Path = Join-Path $InstallDir "peon.ps1"
 $peonShScript = @"
 #!/usr/bin/env bash
 # peon-ping CLI wrapper for Git Bash / WSL / Unix shells on Windows
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& '$peonPs1Path' `$*"
+powershell.exe -NoProfile -NonInteractive -Command "& '$peonPs1Path' `$*"
 "@
 $peonShPath = Join-Path $cliBinDir "peon"
 [System.IO.File]::WriteAllLines($peonShPath, $peonShScript.Split("`n"), $utf8NoBom)
@@ -710,10 +898,16 @@ if ($userPath -notlike "*$cliBinDir*") {
 }
 
 # --- Update Claude Code settings.json with hooks ---
+if (-not $ClaudeCodeDetected) {
+    Write-Host ""
+    Write-Host "Skipping Claude Code hook registration (Claude Code not detected)." -ForegroundColor Yellow
+    Write-Host "Adapters installed to: $adaptersDir" -ForegroundColor Yellow
+    Write-Host "Register hooks manually or re-run after installing Claude Code." -ForegroundColor Yellow
+} else {
 Write-Host ""
 Write-Host "Registering Claude Code hooks..."
 
-$hookCmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$hookScriptPath`""
+$hookCmd = "powershell -NoProfile -NonInteractive -File `"$hookScriptPath`""
 
 # Load settings as PSCustomObject (not hashtable) to preserve all existing
 # values — arrays, strings, nested objects — without corruption.
@@ -779,7 +973,7 @@ Write-Host "  Hooks registered for: $($events -join ', ')" -ForegroundColor Gree
 Write-Host "  Registering UserPromptSubmit hook for /peon-ping-use..."
 
 $beforeSubmitHookPath = Join-Path $InstallDir "scripts\hook-handle-use.ps1"
-$beforeSubmitCmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$beforeSubmitHookPath`""
+$beforeSubmitCmd = "powershell -NoProfile -NonInteractive -File `"$beforeSubmitHookPath`""
 
 # Reload settings to ensure we have the latest
 $settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
@@ -824,6 +1018,7 @@ if ($settings.hooks | Get-Member -Name "beforeSubmitPrompt" -MemberType NoteProp
 
 $settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsFile -Encoding UTF8
 Write-Host "  UserPromptSubmit hook registered for /peon-ping-use" -ForegroundColor Green
+} # end if ($ClaudeCodeDetected)
 
 # --- Register Cursor hooks if ~/.cursor exists ---
 $CursorDir = Join-Path $env:USERPROFILE ".cursor"
@@ -871,19 +1066,29 @@ if (Test-Path $CursorDir) {
         timeout = 5
     }
     
-    $cursorEventHooks = @()
-    if ($cursorData.hooks.PSObject.Properties.Name -contains "beforeSubmitPrompt") {
-        # Remove existing handle-use entries, keep others
-        $cursorEventHooks = @($cursorData.hooks.beforeSubmitPrompt | Where-Object {
-            -not ($_.command -and $_.command -match "hook-handle-use")
+    # Handle both flat-array format [{event, command}] and dict format {event: [{command}]}
+    $hooksIsArray = $cursorData.hooks -is [Array]
+    if ($hooksIsArray) {
+        # Flat array format: remove existing peon-ping beforeSubmitPrompt entries, append new one
+        $cursorData.hooks = @($cursorData.hooks | Where-Object {
+            -not ($_.event -eq "beforeSubmitPrompt" -and $_.command -match "hook-handle-use")
         })
-    }
-    $cursorEventHooks += $cursorBeforeSubmitHook
-    
-    if ($cursorData.hooks.PSObject.Properties.Name -contains "beforeSubmitPrompt") {
-        $cursorData.hooks.beforeSubmitPrompt = $cursorEventHooks
+        $cursorBeforeSubmitHook | Add-Member -NotePropertyName "event" -NotePropertyValue "beforeSubmitPrompt" -Force
+        $cursorData.hooks += $cursorBeforeSubmitHook
     } else {
-        $cursorData.hooks | Add-Member -NotePropertyName "beforeSubmitPrompt" -NotePropertyValue $cursorEventHooks
+        # Dict format
+        $cursorEventHooks = @()
+        if ($cursorData.hooks.PSObject.Properties.Name -contains "beforeSubmitPrompt") {
+            $cursorEventHooks = @($cursorData.hooks.beforeSubmitPrompt | Where-Object {
+                -not ($_.command -and $_.command -match "hook-handle-use")
+            })
+        }
+        $cursorEventHooks += $cursorBeforeSubmitHook
+        if ($cursorData.hooks.PSObject.Properties.Name -contains "beforeSubmitPrompt") {
+            $cursorData.hooks.beforeSubmitPrompt = $cursorEventHooks
+        } else {
+            $cursorData.hooks | Add-Member -NotePropertyName "beforeSubmitPrompt" -NotePropertyValue $cursorEventHooks
+        }
     }
     
     # Ensure directory exists
@@ -1001,7 +1206,7 @@ Write-Host ""
 Write-Host "Testing sound..."
 
 $testPack = try {
-    (Get-Content $configPath -Raw | ConvertFrom-Json).active_pack
+    (Get-PeonConfigRaw $configPath | ConvertFrom-Json).active_pack
 } catch { "peon" }
 
 $testPackDir = Join-Path $InstallDir "packs\$testPack\sounds"
@@ -1031,7 +1236,7 @@ if ($Updating) {
 } else {
     Write-Host "=== peon-ping installed! ===" -ForegroundColor Green
     Write-Host ""
-    $activePack = try { (Get-Content $configPath -Raw | ConvertFrom-Json).active_pack } catch { "peon" }
+    $activePack = try { (Get-PeonConfigRaw $configPath | ConvertFrom-Json).active_pack } catch { "peon" }
     Write-Host "  Active pack: $activePack" -ForegroundColor Cyan
     Write-Host "  Volume: 0.5" -ForegroundColor Cyan
     Write-Host ""
@@ -1042,12 +1247,14 @@ if ($Updating) {
     Write-Host "    peon --volume N   Set volume (0.0-1.0)"
     Write-Host "    peon --pause      Mute sounds"
     Write-Host "    peon --resume     Unmute sounds"
+    Write-Host "    peon --mute       Alias for --pause"
+    Write-Host "    peon --unmute     Alias for --resume"
     Write-Host "    peon --toggle     Toggle on/off"
     Write-Host ""
     Write-Host "  Start Claude Code and you'll hear: `"Ready to work?`"" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  To install specific packs: .\install.ps1 -Packs peon,glados,peasant" -ForegroundColor DarkGray
     Write-Host "  To install ALL packs: .\install.ps1 -All" -ForegroundColor DarkGray
-    Write-Host "  To uninstall: powershell -ExecutionPolicy Bypass -File `"$InstallDir\uninstall.ps1`"" -ForegroundColor DarkGray
+    Write-Host "  To uninstall: powershell -File `"$InstallDir\uninstall.ps1`"" -ForegroundColor DarkGray
 }
 Write-Host ""```

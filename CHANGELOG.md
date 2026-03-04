@@ -1,5 +1,104 @@
 # Changelog
 
+## v2.13.0 (2026-03-03)
+
+### Added
+- **`/peon-ping-rename` skill** — give the current Claude Code session a custom name shown in desktop notification titles and terminal tab title. Zero tokens consumed (intercepted by `UserPromptSubmit` hook). Names stored in `.state.json` keyed by session ID — multiple tabs in the same repo each get independent names. `/peon-ping-rename` with no argument resets to auto-detect.
+- **`CLAUDE_SESSION_NAME` env var** — set before launching `claude` to give a session a fixed name at the environment level. Shows in both notification titles and terminal tab titles.
+- **`notification_title_script` config key** — shell command run at event time to compute the project name dynamically. Receives `PEON_SESSION_ID`, `PEON_CWD`, `PEON_HOOK_EVENT`, `PEON_SESSION_NAME` env vars; stdout used as project name (max 50 chars).
+- **Updated priority chain**: `/peon-ping-rename` > `CLAUDE_SESSION_NAME` > `.peon-label` > `notification_title_script` > `project_name_map` > `notification_title_override` > git repo name > folder name.
+
+### Fixed
+- `.peon-label` tier now correctly guarded with `if not project:` — was previously overwriting higher-priority tiers.
+
+## v2.12.1 (2026-03-02)
+
+### Fixed
+- **mac-overlay cleanup** — orphaned `mac-overlay.js` osascript processes are now killed on `SessionEnd`, preventing stale overlay popups after Claude Code exits (#299, #301)
+- **Adapter cooldown bug** — `amp.sh` and `antigravity.sh` no longer prematurely mark threads idle during the Stop cooldown window, fixing dropped Stop events for rapid task completions (#300)
+
+## v2.12.0 (2026-02-27)
+
+### Added
+- **Windows PowerShell adapters** — native `.ps1` adapters for all 11 IDEs (codex, gemini, copilot, windsurf, kiro, openclaw, amp, antigravity, kimi, opencode, kilo). No Git Bash or WSL required. Filesystem watchers use .NET `FileSystemWatcher`. 198 Pester tests added. (#285)
+
+### Fixed
+- **OpenCode subagent noise** — filter subagent sessions from sound/notification events. Subagent sessions (spawned by Task tool with `parentID`) no longer trigger sounds for `session.idle`, `session.error`, and `session.status` events. (#290, fixes #289)
+
+
+## v2.11.0 (2026-02-26)
+
+### Added
+- **Kimi Code adapter** — filesystem watcher for [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli) (MoonshotAI). Watches `~/.kimi/sessions/` for session events and translates them to CESP format. Uses the same `fswatch`/`inotifywait` pattern as the Amp and Antigravity adapters. Includes BATS tests.
+
+## v2.10.1 (2026-02-25)
+
+### Fixed
+- Fix Ghostty terminal detection when running inside tmux: `_mac_terminal_bundle_id()` now falls back to env vars (`GHOSTTY_RESOURCES_DIR`, `ITERM_SESSION_ID`, `WARP_IS_LOCAL_SHELL_SESSION`) when `TERM_PROGRAM` is overwritten by tmux/screen (#269)
+- Fix case-sensitive Ghostty process name in `terminal_is_focused()`: add lowercase `ghostty` match alongside `Ghostty` (#269)
+
+## v2.10.0 (2026-02-23)
+
+### Added
+- **Amp adapter** — filesystem watcher for [Amp](https://ampcode.com) (Sourcegraph). Watches `~/.local/share/amp/threads/` for thread JSON file changes. Detects `SessionStart` (new thread) and `Stop` (agent finished turn, waiting for input) by inspecting the last message in the thread JSON. Uses the same `fswatch`/`inotifywait` + idle timer pattern as the Antigravity adapter, with an additional `thread_is_waiting()` check to confirm the agent isn't mid-tool-execution. Includes 17 BATS tests.
+
+## v2.9.0 (2026-02-21)
+
+### Added
+- **MSYS2 / Git Bash platform support** — `install.sh`, `peon.sh`, and `scripts/notify.sh` now detect `MSYS_NT-*` / `MINGW*` uname strings as `"msys2"` platform. Audio plays via native players (`ffplay`, `mpv`, `play`) with PowerShell `win-play.ps1` fallback. Desktop notifications use Windows toast (standard) or Windows Forms overlay, with `cygpath -w` for path conversion.
+
+## v2.8.0 (2026-02-20)
+
+### Fixed
+- **Cursor on Windows**: peon.ps1 now maps Cursor's camelCase event names (`sessionStart`, `stop`, etc.) to PascalCase, fixing no-sounds-on-new-chat when using Third-party skills
+- **Cursor on Windows**: `install.ps1` and `uninstall.ps1` now handle Cursor's flat-array `hooks.json` format (matching `install.sh` fix from v2.7.x)
+- peon.ps1 pack rotation: accept `session_override` alias in addition to `agentskill`
+
+### Added
+- Click-to-focus for IDE embedded terminals (Cursor, VS Code, Windsurf, Zed) — when `TERM_PROGRAM` doesn't map to a standalone terminal, falls back to deriving the IDE's bundle ID from its PID via `lsappinfo` (macOS built-in)
+- PID-based `NSRunningApplication` activation in `mac-overlay.js` as belt-and-suspenders fallback when bundle ID lookup fails
+
+## v2.7.0 (2026-02-19)
+
+### Added
+- `path_rules` config array: glob-pattern-based CWD-to-pack assignment (layer 3 in override hierarchy)
+- Click-to-focus terminal on macOS notification click — overlay style detects terminal via `TERM_PROGRAM` → bundle ID mapping (Ghostty, Warp, iTerm2, Terminal.app); standard style uses `terminal-notifier` with `-activate`
+- IDE PID detection (`_mac_ide_pid()`) for Cursor/Windsurf/Zed/VS Code ancestor click-to-focus
+
+### Changed
+- `active_pack` → `default_pack` (backward-compat fallback + `peon update` migration)
+- `agentskill` rotation mode → `session_override` (`agentskill` accepted as alias)
+- Override hierarchy (high→low): `session_override` > local project config > `path_rules` > `pack_rotation` > `default_pack`
+
+# Changelog
+
+## v2.6.0 (2026-02-19)
+
+### Added
+- `suppress_subagent_complete` config option (default: `false`) — when enabled, suppresses `task.complete` sounds and notifications for sub-agent sessions spawned via Claude Code's Task tool, so only the parent session's completion sound fires
+
+## v2.5.0 (2026-02-18)
+
+### Added
+- `cwd` field in `last_active` state (`.state.json`) — records the working directory of each hook invocation, enabling [peon-pet](https://github.com/PeonPing/peon-pet) to display the project folder name in session dot tooltips
+
+## v2.4.1 (2026-02-18)
+
+### Fixed
+- Pack rotation: `session_packs` entries in dict format (after cleanup upgrade) were not recognized by the `in pack_rotation` check, causing a new random pack to be picked on every non-SessionStart event — same session could play sounds from different characters each turn
+- `SubagentStart` now exits silently after saving state — previously could play `task.acknowledge` sound on the parent session
+- Task-spawned subagent sessions now inherit the parent session's voice pack via `pending_subagent_pack` state, ensuring a single conversation always uses one character
+
+## v2.4.0 (2026-02-18)
+
+### Added
+- Project-local config override: place a `config.json` at `.claude/hooks/peon-ping/config.json` in any project to override the global config for that project only
+
+### Fixed
+- `hook-handle-use.sh`: macOS BSD sed does not support `\s`/`\S` — replaced with POSIX `[[:space:]]`/`[^[:space:]]` classes (closes #212)
+- OpenCode plugin: `desktop_notifications: false` in config was ignored — AppleScript notifications now respect the setting (closes #207)
+- OpenCode plugin: Linux audio backend chain now matches `peon.sh` priority order (`pw-play` → `paplay` → `aplay`) with correct per-backend volume scaling
+
 ## v2.3.0 (2026-02-18)
 
 ### Added

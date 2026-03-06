@@ -15,12 +15,24 @@ _peon_completions() {
     case "$subcmd" in
       packs)
         if [ "$cword" -eq 2 ]; then
-          COMPREPLY=( $(compgen -W "list use next install remove" -- "$cur") )
+          COMPREPLY=( $(compgen -W "list use next install install-local remove rotation bind unbind bindings" -- "$cur") )
+        elif [ "$cword" -eq 3 ] && [ "$prev" = "rotation" ]; then
+          COMPREPLY=( $(compgen -W "list add remove" -- "$cur") )
+        elif [ "$cword" -eq 4 ] && [ "${words[2]}" = "rotation" ] && { [ "$prev" = "add" ] || [ "$prev" = "remove" ]; }; then
+          packs_dir="${CLAUDE_PEON_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/peon-ping}/packs"
+          [ ! -d "$packs_dir" ] && [ -d "$HOME/.openpeon/packs" ] && packs_dir="$HOME/.openpeon/packs"
+          if [ -d "$packs_dir" ]; then
+            local names
+            names=$(find "$packs_dir" -maxdepth 2 \( -name manifest.json -o -name openpeon.json \) -exec dirname {} \; 2>/dev/null | xargs -I{} basename {} | sort)
+            COMPREPLY=( $(compgen -W "$names" -- "$cur") )
+          fi
         elif [ "$cword" -eq 3 ] && [ "$prev" = "install" ]; then
           COMPREPLY=( $(compgen -W "--all" -- "$cur") )
+        elif [ "$cword" -eq 3 ] && [ "$prev" = "install-local" ]; then
+          COMPREPLY=( $(compgen -d -- "$cur") )
         elif [ "$cword" -eq 3 ] && [ "$prev" = "list" ]; then
           COMPREPLY=( $(compgen -W "--registry" -- "$cur") )
-        elif [ "$cword" -eq 3 ] && { [ "$prev" = "use" ] || [ "$prev" = "remove" ]; }; then
+        elif [ "$cword" -eq 3 ] && { [ "$prev" = "use" ] || [ "$prev" = "remove" ] || [ "$prev" = "bind" ]; }; then
           packs_dir="${CLAUDE_PEON_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/peon-ping}/packs"
           [ ! -d "$packs_dir" ] && [ -d "$HOME/.openpeon/packs" ] && packs_dir="$HOME/.openpeon/packs"
           if [ -d "$packs_dir" ]; then
@@ -32,7 +44,11 @@ _peon_completions() {
         return 0 ;;
       notifications)
         if [ "$cword" -eq 2 ]; then
-          COMPREPLY=( $(compgen -W "on off overlay standard test" -- "$cur") )
+          COMPREPLY=( $(compgen -W "on off overlay standard position dismiss label test" -- "$cur") )
+        elif [ "$cword" -eq 3 ] && [ "$prev" = "position" ]; then
+          COMPREPLY=( $(compgen -W "top-center top-right top-left bottom-right bottom-left bottom-center" -- "$cur") )
+        elif [ "$cword" -eq 3 ] && [ "$prev" = "label" ]; then
+          COMPREPLY=( $(compgen -W "reset" -- "$cur") )
         fi
         return 0 ;;
       rotation)
@@ -50,13 +66,18 @@ _peon_completions() {
   fi
 
   # Top-level commands
-  COMPREPLY=( $(compgen -W "pause resume toggle status volume rotation packs notifications mobile relay help" -- "$cur") )
+  COMPREPLY=( $(compgen -W "pause resume mute unmute toggle status volume rotation packs notifications mobile relay help" -- "$cur") )
   return 0
 }
 
-# zsh compatibility: enable bashcompinit first
-if [ -n "$ZSH_VERSION" ]; then
-  autoload -Uz bashcompinit 2>/dev/null && bashcompinit
-fi
-
-complete -F _peon_completions peon
+# Only register completions in interactive shells (complete is unavailable in
+# non-interactive contexts like Nix hook environments, CI runners, etc.)
+case "$-" in
+  *i*)
+    # zsh compatibility: enable bashcompinit first
+    if [ -n "$ZSH_VERSION" ]; then
+      autoload -Uz bashcompinit 2>/dev/null && bashcompinit
+    fi
+    complete -F _peon_completions peon
+    ;;
+esac

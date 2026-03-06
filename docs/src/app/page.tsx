@@ -46,11 +46,6 @@ const DEFAULT_PACKS = new Set([
   "glados",
   "sc_kerrigan",
   "sc_battlecruiser",
-  "ra2_kirov",
-  "dota2_axe",
-  "duke_nukem",
-  "tf2_engineer",
-  "hd2_helldiver",
 ]);
 
 /* ------------------------------------------------------------------ */
@@ -347,7 +342,7 @@ export default function LandingPage() {
   const [playingPackBtn, setPlayingPackBtn] = useState<string | null>(null);
 
   /* ---- Pack count ---- */
-  const [packCount, setPackCount] = useState("75+");
+  const [packCount, setPackCount] = useState("160+");
 
   /* ---- Picker state ---- */
   const [registryPacks, setRegistryPacks] = useState<RegistryPack[]>([]);
@@ -653,7 +648,7 @@ export default function LandingPage() {
   }, []);
 
   /* ---- Picker: filter and search ---- */
-  const knownLangs = ["en", "ru", "es", "fr", "cs", "pt-BR"];
+  const knownLangs = ["en", "ru", "es", "fr", "cs", "pt-BR", "zh"];
   const filteredPacks = registryPacks
     .filter((p) => {
       if (activeFilter === "all") return true;
@@ -824,8 +819,13 @@ export default function LandingPage() {
             </a>
           </p>
           <h1>Stop babysitting your terminal</h1>
+          <p className="hero-badge" style={{ textAlign: "center", margin: "0 auto 1rem", fontSize: "0.85rem", color: "var(--wc3-text-dim)" }}>
+            <span style={{ display: "inline-block", background: "rgba(255,215,0,0.08)", border: "1px solid rgba(255,215,0,0.2)", borderRadius: 6, padding: "4px 12px" }}>
+              The project that inspired <a href="https://x.com/pierceboggan/status/2022114493141254300" style={{ color: "var(--wc3-gold)", textDecoration: "none" }}>native sound hooks in VS Code</a> (50M+ users)
+            </span>
+          </p>
           <p className="hero-sub">
-            Game character voice lines the instant your AI agent finishes or needs permission. Or let the agent choose its own sound via MCP. Works with <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Cursor</strong>, <strong>OpenCode</strong>, <strong>Kiro</strong>, <strong>Windsurf</strong>, <strong>Antigravity</strong>, and more. Never lose flow to a silent terminal again.
+            Game character voice lines the instant your AI agent finishes or needs permission. Or let the agent choose its own sound via MCP. The idea that inspired Microsoft to add native sound hooks to VS Code for 50M+ users. Works with <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Cursor</strong>, <strong>OpenCode</strong>, <strong>Kiro</strong>, <strong>Windsurf</strong>, <strong>Antigravity</strong>, and more. Never lose flow to a silent terminal again.
           </p>
           <CopyBlock command="brew install NSXBet/tap/peon-nsx" />
           <p style={{ textAlign: "center", marginTop: "0.75rem", color: "var(--wc3-text-dim)", fontSize: "0.85rem" }}>
@@ -976,7 +976,7 @@ export default function LandingPage() {
 
           <div className="contribute-cta">
             <p>
-              <strong><span className="pack-count">{packCount}</span> packs and counting!</strong> You&apos;re only seeing a few above &mdash; there are many more including GLaDOS, StarCraft Terran units, Czech, Spanish &amp; Russian &amp; Polish Warcraft packs, and others.
+              <strong><span className="pack-count">{packCount}</span> packs and counting!</strong> You&apos;re only seeing a few above &mdash; there are many more including GLaDOS, StarCraft Terran units, SC2 Co-op Commanders (Abathur, Alarak, Stetmann), Czech, Spanish &amp; Russian &amp; Polish Warcraft packs, and others.
             </p>
             <p>
               Run <code>peon packs list --registry</code> to see what&apos;s available, <code>peon packs install</code> to add more, or <a href="https://openpeon.com/packs">browse the full catalog at openpeon.com</a>.
@@ -1016,6 +1016,7 @@ export default function LandingPage() {
               { lang: "fr", label: "French" },
               { lang: "cs", label: "Czech" },
               { lang: "pt-BR", label: "Portuguese (BR)" },
+              { lang: "zh", label: "Chinese" },
               { lang: "other", label: "Other" },
               { lang: "all", label: "All" },
             ].map((f) => (
@@ -1239,7 +1240,7 @@ export default function LandingPage() {
               <div className="feature-text">
                 <h3>Pack system</h3>
                 <p>
-                  <span className="pack-count">{packCount}</span> packs across 7 languages. <a href="#picker">Pick your favorites</a> or <a href="https://openpeon.com/create">create your own.</a>
+                  <span className="pack-count">{packCount}</span> packs across 14 languages. <a href="#picker">Pick your favorites</a> or <a href="https://openpeon.com/create">create your own.</a>
                 </p>
               </div>
             </div>
@@ -1311,6 +1312,35 @@ export default function LandingPage() {
           <div className="trainer-enable">
             <CopyBlock command="peon trainer on" label="Copy trainer enable command" />
           </div>
+        </div>
+      </section>
+
+      {/* ============ DESKTOP PET ============ */}
+      <section id="pet">
+        <div className="container" style={{ textAlign: "center" }}>
+          <p className="section-label">Desktop pet</p>
+          <h2 className="section-title">Watch your Peon work</h2>
+          <p className="section-desc">
+            An animated orc sits in the corner of your screen and reacts to every Claude Code event — sleeping, waking up, typing, celebrating, and more. Session dots show all active Claude Code windows at a glance.
+          </p>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 24, flexWrap: "wrap" }}>
+            <video
+              src="/demo-avatar.mp4"
+              autoPlay
+              loop
+              muted
+              playsInline
+              style={{ maxWidth: 360, width: "100%", borderRadius: 8 }}
+            />
+            <img
+              src="/images/peon-pet-sleeping.png"
+              alt="Peon pet sleeping at desk"
+              style={{ maxWidth: 280, width: "100%", borderRadius: 8 }}
+            />
+          </div>
+          <p style={{ marginTop: "1rem", color: "var(--wc3-text-dim)", fontSize: "0.9rem" }}>
+            <a href="https://github.com/PeonPing/peon-pet" style={{ color: "var(--wc3-gold)" }}>peon-pet</a> — macOS, Electron + Three.js, open source
+          </p>
         </div>
       </section>
 

@@ -42,8 +42,8 @@ if ! echo "$PROMPT" | grep -qE '^\s*/peon-ping-use\s+\S+'; then
   exit 0
 fi
 
-# Extract pack name from command
-PACK_NAME=$(echo "$PROMPT" | sed -E 's/^\s*\/peon-ping-use\s+(\S+).*/\1/')
+# Extract pack name from command (POSIX classes required; macOS BSD sed does not support \s/\S)
+PACK_NAME=$(echo "$PROMPT" | sed -E 's/^[[:space:]]*\/peon-ping-use[[:space:]]+([^[:space:]]+).*/\1/')
 log "matched pack=$PACK_NAME sessionId=$SESSION_ID"
 
 # Safe charset: letters, numbers, underscore, hyphen (prevents injection and path traversal)
@@ -91,11 +91,12 @@ fi
 # so peon.sh will apply this pack for sessions without explicit assignment
 
 # Update config.json to enable agentskill mode and ensure pack is in rotation
+export PEON_ENV_CONFIG="$CONFIG" PEON_ENV_PACK_NAME="$PACK_NAME"
 python3 -c "
-import json, sys
+import json, sys, os
 
-config_path = '$CONFIG'
-pack_name = '$PACK_NAME'
+config_path = os.environ.get('PEON_ENV_CONFIG', '')
+pack_name = os.environ.get('PEON_ENV_PACK_NAME', '')
 
 # Load config
 try:
@@ -120,12 +121,13 @@ with open(config_path, 'w') as f:
 "
 
 # Update .state.json to map session to pack
+export PEON_ENV_STATE="$STATE" PEON_ENV_SESSION_ID="$SESSION_ID" PEON_ENV_PACK_NAME="$PACK_NAME"
 python3 -c "
-import json, sys, time
+import json, sys, time, os
 
-state_path = '$STATE'
-session_id = '$SESSION_ID'
-pack_name = '$PACK_NAME'
+state_path = os.environ.get('PEON_ENV_STATE', '')
+session_id = os.environ.get('PEON_ENV_SESSION_ID', '')
+pack_name = os.environ.get('PEON_ENV_PACK_NAME', '')
 
 # Load or create state
 try:

@@ -28,6 +28,43 @@ teardown() {
   ! afplay_was_called
 }
 
+@test "rapid SessionStart events from multiple workspaces are debounced" {
+  # Enable debounce cooldown (global test config sets it to 0 to avoid flaky timing tests)
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['session_start_cooldown_seconds'] = 30
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+"
+  # First SessionStart plays the greeting
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/proj1","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  count1=$(afplay_call_count)
+  [ "$count1" = "1" ]
+
+  # Second SessionStart (different session, same instant) does NOT play again
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/proj2","session_id":"s2","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  count2=$(afplay_call_count)
+  [ "$count2" = "1" ]
+}
+
+@test "SessionStart plays greeting after cooldown expires" {
+  # Enable debounce cooldown and set last greeting to 60 seconds ago (beyond 30s cooldown)
+  /usr/bin/python3 -c "
+import json, time
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['session_start_cooldown_seconds'] = 30
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+state = json.load(open('$TEST_DIR/.state.json'))
+state['last_session_start_sound_time'] = time.time() - 60
+json.dump(state, open('$TEST_DIR/.state.json', 'w'))
+"
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
 @test "Notification permission_prompt sets tab title but no sound (PermissionRequest handles sound)" {
   run_peon '{"hook_event_name":"Notification","notification_type":"permission_prompt","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
   [ "$PEON_EXIT" -eq 0 ]
@@ -99,6 +136,54 @@ json.dump(state, open('$TEST_DIR/.state.json', 'w'))
   run_peon '{"hook_event_name":"Notification","notification_type":"something_else","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
   [ "$PEON_EXIT" -eq 0 ]
   ! afplay_was_called
+}
+
+# ============================================================
+# Local config override (project-local .claude/hooks/peon-ping/config.json)
+# ============================================================
+
+@test "local config overrides global config when present" {
+  # Create a fake project dir with a local config pointing to sc_kerrigan
+  local project_dir
+  project_dir="$(mktemp -d)"
+  local local_cfg_dir="$project_dir/.claude/hooks/peon-ping"
+  mkdir -p "$local_cfg_dir"
+  cat > "$local_cfg_dir/config.json" <<'JSON'
+{
+  "active_pack": "sc_kerrigan",
+  "volume": 0.5,
+  "enabled": true,
+  "categories": {
+    "session.start": true,
+    "task.complete": true
+  }
+}
+JSON
+
+  # Run peon.sh from the project dir (PWD determines local config lookup)
+  # Use a subshell so the cd is scoped
+  (
+    cd "$project_dir"
+    echo '{"hook_event_name":"Stop","cwd":"'"$project_dir"'","session_id":"s1","permission_mode":"default"}' \
+      | CLAUDE_PEON_DIR="$TEST_DIR" PEON_TEST=1 bash "$PEON_SH" 2>/dev/null
+  )
+  sleep 0.2  # allow async afplay mock to finish writing log
+  rm -rf "$project_dir"
+
+  # Should have played sc_kerrigan sound (from local config), not peon
+  [ -f "$TEST_DIR/afplay.log" ]
+  local sound
+  sound=$(tail -1 "$TEST_DIR/afplay.log" | awk '{print $NF}')
+  [[ "$sound" == *"/packs/sc_kerrigan/"* ]]
+}
+
+@test "falls back to global config when no local config present" {
+  # No local config — should use global config with peon pack
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/peon/sounds/"* ]]
 }
 
 # ============================================================
@@ -344,6 +429,105 @@ json.dump(state, open('$TEST_DIR/.state.json', 'w'))
 }
 
 # ============================================================
+# suppress_subagent_complete
+# ============================================================
+
+@test "suppress_subagent_complete: subagent Stop is suppressed" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {}, "suppress_subagent_complete": true, "pack_rotation": ["peon","peon"] }
+JSON
+  # Parent session gets a SubagentStart (records pending_subagent_pack)
+  run_peon '{"hook_event_name":"SubagentStart","cwd":"/tmp/myproject","session_id":"parent1","permission_mode":"default"}'
+  # Subagent session starts within 30s — should inherit pack and be marked as subagent
+  # (SessionStart plays a greeting sound — capture count before Stop)
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"sub1","permission_mode":"default"}'
+  count_before=$(afplay_call_count)
+  # Subagent Stop should be suppressed — no additional afplay calls
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"sub1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  count_after=$(afplay_call_count)
+  [ "$count_after" = "$count_before" ]
+}
+
+@test "suppress_subagent_complete: parent Stop still plays sound" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {}, "suppress_subagent_complete": true, "pack_rotation": ["peon","peon"] }
+JSON
+  # Subagent flow: parent → SubagentStart → sub SessionStart (suppressed)
+  run_peon '{"hook_event_name":"SubagentStart","cwd":"/tmp/myproject","session_id":"parent2","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"sub2","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"sub2","permission_mode":"default"}'
+  ! afplay_was_called
+  # Clear debounce so parent Stop isn't debounced
+  /usr/bin/python3 -c "
+import json, time
+state = json.load(open('$TEST_DIR/.state.json'))
+state['last_stop_time'] = 0
+json.dump(state, open('$TEST_DIR/.state.json', 'w'))
+"
+  # Parent session Stop should still play
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"parent2","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+@test "suppress_subagent_complete: disabled by default does not suppress" {
+  # Default config has suppress_subagent_complete=false
+  run_peon '{"hook_event_name":"SubagentStart","cwd":"/tmp/myproject","session_id":"parent3","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"sub3","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"sub3","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+@test "suppress_subagent_complete: subagent_sessions cleaned up on SessionEnd" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {}, "suppress_subagent_complete": true, "pack_rotation": ["peon","peon"] }
+JSON
+  run_peon '{"hook_event_name":"SubagentStart","cwd":"/tmp/myproject","session_id":"parent4","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"sub4","permission_mode":"default"}'
+  # SessionEnd removes sub4 from subagent_sessions
+  run_peon '{"hook_event_name":"SessionEnd","cwd":"/tmp/myproject","session_id":"sub4","permission_mode":"default"}'
+  # Verify sub4 is gone from state
+  result=$(/usr/bin/python3 -c "
+import json
+state = json.load(open('$TEST_DIR/.state.json'))
+subs = state.get('subagent_sessions', {})
+print('absent' if 'sub4' not in subs else 'present')
+")
+  [ "$result" = "absent" ]
+}
+
+@test "suppress_subagent_complete: subagent PermissionRequest is suppressed" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {}, "suppress_subagent_complete": true, "pack_rotation": ["peon","peon"] }
+JSON
+  # Parent session gets a SubagentStart (records pending_subagent_pack)
+  run_peon '{"hook_event_name":"SubagentStart","cwd":"/tmp/myproject","session_id":"parent5","permission_mode":"default"}'
+  # Subagent session starts within 30s — marked as subagent
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"sub5","permission_mode":"default"}'
+  count_before=$(afplay_call_count)
+  # Subagent PermissionRequest should be suppressed — no additional afplay calls
+  run_peon '{"hook_event_name":"PermissionRequest","cwd":"/tmp/myproject","session_id":"sub5","permission_mode":"default","tool_name":"Bash"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  count_after=$(afplay_call_count)
+  [ "$count_after" = "$count_before" ]
+}
+
+@test "suppress_subagent_complete: parent PermissionRequest still plays sound" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{ "active_pack": "peon", "volume": 0.5, "enabled": true, "categories": {}, "suppress_subagent_complete": true, "pack_rotation": ["peon","peon"] }
+JSON
+  # Subagent flow: parent → SubagentStart → sub SessionStart
+  run_peon '{"hook_event_name":"SubagentStart","cwd":"/tmp/myproject","session_id":"parent6","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"sub6","permission_mode":"default"}'
+  # Parent session PermissionRequest should still play
+  run_peon '{"hook_event_name":"PermissionRequest","cwd":"/tmp/myproject","session_id":"parent6","permission_mode":"default","tool_name":"Bash"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+# ============================================================
 # Update check
 # ============================================================
 
@@ -381,6 +565,98 @@ json.dump(state, open('$TEST_DIR/.state.json', 'w'))
 @test "empty cwd falls back to 'claude'" {
   run_peon '{"hook_event_name":"SessionStart","cwd":"","session_id":"s1","permission_mode":"default"}'
   [ "$PEON_EXIT" -eq 0 ]
+}
+
+@test "state session_names overrides project name (set via /peon-ping-rename)" {
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['notification_style'] = 'standard'
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+state = json.load(open('$TEST_DIR/.state.json'))
+state['session_names'] = {'s1': 'My Renamed Session'}
+json.dump(state, open('$TEST_DIR/.state.json', 'w'))
+"
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  [ -f "$TEST_DIR/terminal_notifier.log" ]
+  grep -q "My Renamed Session" "$TEST_DIR/terminal_notifier.log"
+}
+
+@test "state session_names takes priority over CLAUDE_SESSION_NAME" {
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['notification_style'] = 'standard'
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+state = json.load(open('$TEST_DIR/.state.json'))
+state['session_names'] = {'s1': 'State Name'}
+json.dump(state, open('$TEST_DIR/.state.json', 'w'))
+"
+  CLAUDE_SESSION_NAME="Env Name" \
+    run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  [ -f "$TEST_DIR/terminal_notifier.log" ]
+  grep -q "State Name" "$TEST_DIR/terminal_notifier.log"
+  ! grep -q "Env Name" "$TEST_DIR/terminal_notifier.log"
+}
+
+@test "CLAUDE_SESSION_NAME overrides project name in notification title" {
+  # Set standard notification style so title appears in terminal_notifier.log
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['notification_style'] = 'standard'
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+"
+  CLAUDE_SESSION_NAME="My Test Session" \
+    run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  [ -f "$TEST_DIR/terminal_notifier.log" ]
+  grep -q "My Test Session" "$TEST_DIR/terminal_notifier.log"
+}
+
+@test "CLAUDE_SESSION_NAME strips disallowed characters" {
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['notification_style'] = 'standard'
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+"
+  CLAUDE_SESSION_NAME="Feature: Auth <Refactor>" \
+    run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  [ -f "$TEST_DIR/terminal_notifier.log" ]
+  # Angle brackets and colon stripped; remaining text preserved
+  grep -q "Feature Auth Refactor" "$TEST_DIR/terminal_notifier.log"
+}
+
+@test "notification_title_script output used as project name" {
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['notification_style'] = 'standard'
+cfg['notification_title_script'] = 'echo Scripted'
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+"
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  [ -f "$TEST_DIR/terminal_notifier.log" ]
+  grep -q "Scripted" "$TEST_DIR/terminal_notifier.log"
+}
+
+@test "notification_title_script non-zero exit falls through to next tier" {
+  /usr/bin/python3 -c "
+import json
+cfg = json.load(open('$TEST_DIR/config.json'))
+cfg['notification_style'] = 'standard'
+cfg['notification_title_script'] = 'exit 1'
+json.dump(cfg, open('$TEST_DIR/config.json', 'w'))
+"
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  # Falls through to git/folder name — just verify it ran without crashing
+  [ -f "$TEST_DIR/terminal_notifier.log" ]
 }
 
 # ============================================================
@@ -485,6 +761,21 @@ JSON
 @test "resume removes .paused file" {
   touch "$TEST_DIR/.paused"
   run bash "$PEON_SH" resume
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sounds resumed"* ]]
+  [ ! -f "$TEST_DIR/.paused" ]
+}
+
+@test "mute creates .paused file" {
+  run bash "$PEON_SH" mute
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sounds paused"* ]]
+  [ -f "$TEST_DIR/.paused" ]
+}
+
+@test "unmute removes .paused file" {
+  touch "$TEST_DIR/.paused"
+  run bash "$PEON_SH" unmute
   [ "$status" -eq 0 ]
   [[ "$output" == *"sounds resumed"* ]]
   [ ! -f "$TEST_DIR/.paused" ]
@@ -632,8 +923,9 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
   export CLAUDE_PEON_DIR="$TEST_DIR"
 }
 
-@test "CESP shared path takes priority over Claude hooks dir" {
-  # Both paths exist — CESP should win
+@test "Claude hooks dir takes priority over CESP shared path (fixes #250)" {
+  # Both paths exist — Claude hooks dir should win so CLI writes config
+  # to the same location the hook reads from.
   FAKE_HOME="$(mktemp -d)"
   CESP_DIR="$FAKE_HOME/.openpeon"
   HOOKS_DIR="$FAKE_HOME/.claude/hooks/peon-ping"
@@ -649,10 +941,9 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
   unset CLAUDE_PEON_DIR
   run env HOME="$FAKE_HOME" bash "$PEON_SH" packs list
   [ "$status" -eq 0 ]
-  # Should find peon (from CESP), not sc_kerrigan (from hooks)
-  [[ "$output" == *"peon"* ]]
-  [[ "$output" == *"Orc Peon"* ]]
-  [[ "$output" != *"sc_kerrigan"* ]]
+  # Should find sc_kerrigan (from hooks dir), not peon (from CESP)
+  [[ "$output" == *"sc_kerrigan"* ]]
+  [[ "$output" != *"Orc Peon"* ]]
 
   rm -rf "$FAKE_HOME"
   export CLAUDE_PEON_DIR="$TEST_DIR"
@@ -668,7 +959,7 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
   [[ "$output" == *"switched to sc_kerrigan"* ]]
   [[ "$output" == *"Sarah Kerrigan"* ]]
   # Verify config was updated
-  active=$(/usr/bin/python3 -c "import json; print(json.load(open('$TEST_DIR/config.json'))['active_pack'])")
+  active=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c.get('default_pack', c.get('active_pack')))")
   [ "$active" = "sc_kerrigan" ]
 }
 
@@ -687,7 +978,7 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
 
 @test "packs use <name> does not modify config on invalid pack" {
   bash "$PEON_SH" packs use nonexistent || true
-  active=$(/usr/bin/python3 -c "import json; print(json.load(open('$TEST_DIR/config.json'))['active_pack'])")
+  active=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c.get('default_pack', c.get('active_pack', 'peon')))")
   [ "$active" = "peon" ]
 }
 
@@ -702,7 +993,7 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
   [ -d "$TEST_DIR/packs/test_pack_a" ]
   [ -f "$TEST_DIR/packs/test_pack_a/openpeon.json" ]
   [[ "$output" == *"switched to test_pack_a"* ]]
-  active=$(/usr/bin/python3 -c "import json; print(json.load(open('$TEST_DIR/config.json'))['active_pack'])")
+  active=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c.get('default_pack', c.get('active_pack')))")
   [ "$active" = "test_pack_a" ]
 }
 
@@ -711,7 +1002,7 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
   run bash "$PEON_SH" packs use --install sc_kerrigan
   [ "$status" -eq 0 ]
   [[ "$output" == *"switched to sc_kerrigan"* ]]
-  active=$(/usr/bin/python3 -c "import json; print(json.load(open('$TEST_DIR/config.json'))['active_pack'])")
+  active=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c.get('default_pack', c.get('active_pack')))")
   [ "$active" = "sc_kerrigan" ]
 }
 
@@ -751,7 +1042,7 @@ json.dump(c, open('$TEST_DIR/config.json', 'w'), indent=2)
 
 @test "packs next updates config correctly" {
   bash "$PEON_SH" packs next
-  active=$(/usr/bin/python3 -c "import json; print(json.load(open('$TEST_DIR/config.json'))['active_pack'])")
+  active=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c.get('default_pack', c.get('active_pack')))")
   [ "$active" = "sc_kerrigan" ]
 }
 
@@ -1007,6 +1298,151 @@ print(','.join(rotation))
 }
 
 # ============================================================
+# Packs rotation CLI (peon packs rotation add/remove/list)
+# ============================================================
+
+@test "packs rotation list shows mode and packs" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon", "sc_kerrigan"],
+  "pack_rotation_mode": "round-robin"
+}
+JSON
+  run bash "$PEON_SH" packs rotation list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"round-robin"* ]]
+  [[ "$output" == *"peon"* ]]
+  [[ "$output" == *"sc_kerrigan"* ]]
+}
+
+@test "packs rotation list shows empty when no packs" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": []
+}
+JSON
+  run bash "$PEON_SH" packs rotation list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(empty)"* ]]
+}
+
+@test "packs rotation add adds installed pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon"]
+}
+JSON
+  run bash "$PEON_SH" packs rotation add sc_kerrigan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added sc_kerrigan"* ]]
+  rotation=$(/usr/bin/python3 -c "import json; print(','.join(json.load(open('$TEST_DIR/config.json')).get('pack_rotation', [])))")
+  [[ "$rotation" == *"sc_kerrigan"* ]]
+  [[ "$rotation" == *"peon"* ]]
+}
+
+@test "packs rotation add rejects nonexistent pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon"]
+}
+JSON
+  run bash "$PEON_SH" packs rotation add nonexistent_pack
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not found"* ]]
+}
+
+@test "packs rotation add rejects duplicate pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon"]
+}
+JSON
+  run bash "$PEON_SH" packs rotation add peon
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already in rotation"* ]]
+}
+
+@test "packs rotation add multiple packs comma-separated" {
+  mkdir -p "$TEST_DIR/packs/glados/sounds"
+  cat > "$TEST_DIR/packs/glados/openpeon.json" <<'JSON'
+{
+  "name": "glados", "display_name": "GLaDOS",
+  "categories": { "session.start": { "sounds": [{ "file": "Hello.wav", "label": "Hello" }] } }
+}
+JSON
+  touch "$TEST_DIR/packs/glados/sounds/Hello.wav"
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": []
+}
+JSON
+  run bash "$PEON_SH" packs rotation add sc_kerrigan,glados
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added sc_kerrigan"* ]]
+  [[ "$output" == *"Added glados"* ]]
+}
+
+@test "packs rotation remove removes pack from rotation" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon", "sc_kerrigan"]
+}
+JSON
+  run bash "$PEON_SH" packs rotation remove sc_kerrigan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Removed sc_kerrigan"* ]]
+  rotation=$(/usr/bin/python3 -c "import json; print(','.join(json.load(open('$TEST_DIR/config.json')).get('pack_rotation', [])))")
+  [[ "$rotation" == "peon" ]]
+}
+
+@test "packs rotation remove rejects pack not in rotation" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon"]
+}
+JSON
+  run bash "$PEON_SH" packs rotation remove sc_kerrigan
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not in rotation"* ]]
+}
+
+@test "packs rotation no args shows usage" {
+  run bash "$PEON_SH" packs rotation invalid_sub
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage"* ]]
+}
+
+@test "packs rotation add no args shows usage" {
+  run bash "$PEON_SH" packs rotation add
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage"* ]]
+}
+
+@test "help shows packs rotation commands" {
+  run bash "$PEON_SH" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"packs rotation list"* ]]
+  [[ "$output" == *"packs rotation add"* ]]
+  [[ "$output" == *"packs rotation remove"* ]]
+}
+
+# ============================================================
 # Pack rotation
 # ============================================================
 
@@ -1043,6 +1479,77 @@ JSON
   run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"rot2","permission_mode":"default"}'
   sound2=$(afplay_sound)
   [[ "$sound2" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "pack_rotation keeps same pack when session_packs entry is dict format" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "active_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["sc_kerrigan"]
+}
+JSON
+  # Inject state with dict-format entry (as cleanup code produces)
+  /usr/bin/python3 <<PYTHON
+import json, os, time
+state_file = os.environ['TEST_DIR'] + '/.state.json'
+state = json.load(open(state_file))
+state.setdefault('session_packs', {})['rot-dict'] = {'pack': 'sc_kerrigan', 'last_used': time.time()}
+json.dump(state, open(state_file, 'w'))
+PYTHON
+
+  # Subsequent event should reuse sc_kerrigan, not pick a random pack
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"rot-dict","permission_mode":"default"}'
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "SubagentStart fires no sound and saves pending_subagent_pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "active_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {"task.acknowledge": true},
+  "pack_rotation": ["sc_kerrigan"]
+}
+JSON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"par1","permission_mode":"default"}'
+  run_peon '{"hook_event_name":"subagentStart","cwd":"/tmp/myproject","session_id":"par1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  ! afplay_was_called
+
+  # pending_subagent_pack should be written to state
+  pending=$(/usr/bin/python3 -c "
+import json, os
+state = json.load(open(os.environ['TEST_DIR'] + '/.state.json'))
+p = state.get('pending_subagent_pack', {})
+print(p.get('pack', ''))
+")
+  [ "$pending" = "sc_kerrigan" ]
+}
+
+@test "child SessionStart inherits parent pack via pending_subagent_pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "active_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["sc_kerrigan", "peon"]
+}
+JSON
+  # Inject pending_subagent_pack as if parent just fired SubagentStart with sc_kerrigan
+  /usr/bin/python3 <<PYTHON
+import json, os, time
+state_file = os.environ['TEST_DIR'] + '/.state.json'
+state = json.load(open(state_file))
+state['pending_subagent_pack'] = {'ts': time.time(), 'pack': 'sc_kerrigan'}
+json.dump(state, open(state_file, 'w'))
+PYTHON
+
+  # Child session start should inherit sc_kerrigan, not pick random
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"child1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
 }
 
 @test "empty pack_rotation falls back to active_pack" {
@@ -1759,13 +2266,13 @@ setup_adapter_sync() {
 JSON
 }
 
-@test "packs use syncs active_pack to OpenCode adapter config" {
+@test "packs use syncs default_pack to OpenCode adapter config" {
   setup_adapter_sync
   bash "$PEON_SH" packs use sc_kerrigan
   python3 -c "
 import json
 cfg = json.load(open('$XDG_CONFIG_HOME/opencode/peon-ping/config.json'))
-assert cfg['active_pack'] == 'sc_kerrigan', f'expected sc_kerrigan, got {cfg[\"active_pack\"]}'
+assert cfg['default_pack'] == 'sc_kerrigan', f'expected sc_kerrigan, got {cfg.get(\"default_pack\")}'
 "
 }
 
@@ -1782,14 +2289,14 @@ assert cfg['categories']['session.end'] == True, 'session.end category should be
 "
 }
 
-@test "packs next syncs active_pack to OpenCode adapter config" {
+@test "packs next syncs default_pack to OpenCode adapter config" {
   setup_adapter_sync
   bash "$PEON_SH" packs next
   python3 -c "
 import json
 # The canonical config should have switched from peon to sc_kerrigan (alphabetical)
 cfg = json.load(open('$XDG_CONFIG_HOME/opencode/peon-ping/config.json'))
-assert cfg['active_pack'] == 'sc_kerrigan', f'expected sc_kerrigan, got {cfg[\"active_pack\"]}'
+assert cfg['default_pack'] == 'sc_kerrigan', f'expected sc_kerrigan, got {cfg.get(\"default_pack\")}'
 "
 }
 
@@ -2177,7 +2684,7 @@ json.dump(m, open('$TEST_DIR/packs/peon/manifest.json', 'w'))
   run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
   [ "$PEON_EXIT" -eq 0 ]
   [ -f "$TEST_DIR/overlay.log" ]
-  # overlay.log line: -l JavaScript /path/mac-overlay.js msg color icon slot dismiss ide_pid
+  # overlay.log line: -l JavaScript /path/mac-overlay.js msg color icon slot dismiss bundle_id ide_pid session_tty subtitle notif_position
   args=$(tail -1 "$TEST_DIR/overlay.log")
   # Count space-separated tokens — should be at least 7 after "-l JavaScript script"
   count=$(echo "$args" | wc -w | tr -d ' ')
@@ -2191,7 +2698,10 @@ json.dump(m, open('$TEST_DIR/packs/peon/manifest.json', 'w'))
   run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
   [ "$PEON_EXIT" -eq 0 ]
   [ -f "$TEST_DIR/overlay.log" ]
-  ide_pid=$(tail -1 "$TEST_DIR/overlay.log" | awk '{print $NF}')
+  # Fields from end: ... bundle_id ide_pid session_tty subtitle notif_position
+  # With awk (empty fields collapse): ... bundle_id ide_pid session_tty notif_position
+  # ide_pid is NF-2 (session_tty=NF-1, notif_position=NF)
+  ide_pid=$(tail -1 "$TEST_DIR/overlay.log" | awk '{print $(NF-2)}')
   [[ "$ide_pid" =~ ^[0-9]+$ ]]
 }
 
@@ -2228,4 +2738,811 @@ SCRIPT
   [ "$ide_pid" = "8000" ]
 }
 
+# ============================================================
+# path_rules: CWD-to-pack glob matching
+# ============================================================
+
+@test "path_rules: matching rule uses the specified pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "path_rules: no matching rule falls through to default_pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": [
+    { "pattern": "*/other-project*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr2","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/peon/sounds/"* ]]
+}
+
+@test "path_rules: first matching rule wins (not second)" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "sc_kerrigan" },
+    { "pattern": "*/myproject*", "pack": "peon" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr3","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "path_rules: missing pack falls through to default_pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "nonexistent_pack" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr4","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/peon/sounds/"* ]]
+}
+
+@test "path_rules: beats pack_rotation" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation": ["peon", "sc_kerrigan"],
+  "pack_rotation_mode": "round-robin",
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr5","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  # Path rule wins over rotation
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "path_rules: glob with ** pattern matches nested path" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": [
+    { "pattern": "/home/user/*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr6","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "path_rules: empty path_rules array uses default_pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": []
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"pr7","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/peon/sounds/"* ]]
+}
+
+@test "path_rules: session_override beats path_rules" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation_mode": "session_override",
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  # Inject explicit session assignment for peon (overrides path_rule for sc_kerrigan)
+  python3 <<'PYTHON'
+import json, os, time
+state_file = os.environ['TEST_DIR'] + '/.state.json'
+now = int(time.time())
+state = {'session_packs': {'so1': {'pack': 'peon', 'last_used': now}}}
+with open(state_file, 'w') as f:
+    json.dump(state, f)
+PYTHON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"so1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  # session_override wins: should be peon, not sc_kerrigan
+  [[ "$sound" == *"/packs/peon/sounds/"* ]]
+}
+
+@test "path_rules: no cwd uses default_pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"","session_id":"pr8","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/peon/sounds/"* ]]
+}
+
+# ============================================================
+# default_pack rename (active_pack → default_pack migration compat)
+# ============================================================
+
+@test "default_pack key is read correctly" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "sc_kerrigan", "volume": 0.5, "enabled": true,
+  "categories": {}
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"dp1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "active_pack still works as legacy fallback when default_pack absent" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "active_pack": "sc_kerrigan", "volume": 0.5, "enabled": true,
+  "categories": {}
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"dp2","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "default_pack takes precedence over active_pack when both present" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "sc_kerrigan",
+  "active_pack": "peon",
+  "volume": 0.5, "enabled": true,
+  "categories": {}
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"dp3","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+# ============================================================
+# session_override mode (renamed from agentskill)
+# ============================================================
+
+@test "session_override mode uses assigned pack" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation_mode": "session_override"
+}
+JSON
+  python3 <<'PYTHON'
+import json, os, time
+state_file = os.environ['TEST_DIR'] + '/.state.json'
+now = int(time.time())
+state = {'session_packs': {'so_new1': {'pack': 'sc_kerrigan', 'last_used': now}}}
+with open(state_file, 'w') as f:
+    json.dump(state, f)
+PYTHON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"so_new1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "session_override mode uses path_rule when no assignment" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation_mode": "session_override",
+  "path_rules": [
+    { "pattern": "*/myproject*", "pack": "sc_kerrigan" }
+  ]
+}
+JSON
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"so_new2","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  # No session assignment, path_rule should win
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "agentskill mode still works as alias for session_override" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "peon", "volume": 0.5, "enabled": true,
+  "categories": {},
+  "pack_rotation_mode": "agentskill"
+}
+JSON
+  python3 <<'PYTHON'
+import json, os, time
+state_file = os.environ['TEST_DIR'] + '/.state.json'
+now = int(time.time())
+state = {'session_packs': {'ask_alias': {'pack': 'sc_kerrigan', 'last_used': now}}}
+with open(state_file, 'w') as f:
+    json.dump(state, f)
+PYTHON
+  run_peon '{"hook_event_name":"SessionStart","cwd":"/tmp/myproject","session_id":"ask_alias","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+# ============================================================
+# peon update migration
+# ============================================================
+
+@test "peon update migrates active_pack to default_pack in config" {
+  # Write a legacy config with active_pack
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "active_pack": "sc_kerrigan",
+  "volume": 0.5,
+  "enabled": true,
+  "pack_rotation_mode": "random"
+}
+JSON
+  # Run the migration Python inline (same logic as peon update block)
+  python3 <<PYTHON
+import json, os
+config_path = '${TEST_DIR}/config.json'
+try:
+    cfg = json.load(open(config_path))
+except Exception:
+    cfg = {}
+changed = False
+if 'active_pack' in cfg and 'default_pack' not in cfg:
+    cfg['default_pack'] = cfg.pop('active_pack')
+    changed = True
+elif 'active_pack' in cfg:
+    cfg.pop('active_pack')
+    changed = True
+if cfg.get('pack_rotation_mode') == 'agentskill':
+    cfg['pack_rotation_mode'] = 'session_override'
+    changed = True
+if changed:
+    json.dump(cfg, open(config_path, 'w'), indent=2)
+PYTHON
+
+  # Verify migration result
+  python3 <<'PYTHON'
+import json, os
+config_path = os.environ['TEST_DIR'] + '/config.json'
+cfg = json.load(open(config_path))
+assert 'active_pack' not in cfg, "active_pack should have been removed"
+assert cfg.get('default_pack') == 'sc_kerrigan', "default_pack should be sc_kerrigan"
+PYTHON
+}
+
+@test "peon update migrates agentskill to session_override" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "active_pack": "peon",
+  "volume": 0.5,
+  "enabled": true,
+  "pack_rotation_mode": "agentskill"
+}
+JSON
+  python3 <<PYTHON
+import json, os
+config_path = '${TEST_DIR}/config.json'
+try:
+    cfg = json.load(open(config_path))
+except Exception:
+    cfg = {}
+changed = False
+if 'active_pack' in cfg and 'default_pack' not in cfg:
+    cfg['default_pack'] = cfg.pop('active_pack')
+    changed = True
+elif 'active_pack' in cfg:
+    cfg.pop('active_pack')
+    changed = True
+if cfg.get('pack_rotation_mode') == 'agentskill':
+    cfg['pack_rotation_mode'] = 'session_override'
+    changed = True
+if changed:
+    json.dump(cfg, open(config_path, 'w'), indent=2)
+PYTHON
+
+  python3 <<'PYTHON'
+import json, os
+config_path = os.environ['TEST_DIR'] + '/config.json'
+cfg = json.load(open(config_path))
+assert cfg.get('pack_rotation_mode') == 'session_override', "should be session_override"
+assert 'active_pack' not in cfg, "active_pack should be gone"
+assert cfg.get('default_pack') == 'peon', "default_pack should be peon"
+PYTHON
+}
+
+@test "peon update migration is idempotent (default_pack already present)" {
+  cat > "$TEST_DIR/config.json" <<'JSON'
+{
+  "default_pack": "sc_kerrigan",
+  "volume": 0.5,
+  "enabled": true,
+  "pack_rotation_mode": "session_override"
+}
+JSON
+  python3 <<PYTHON
+import json, os
+config_path = '${TEST_DIR}/config.json'
+try:
+    cfg = json.load(open(config_path))
+except Exception:
+    cfg = {}
+changed = False
+if 'active_pack' in cfg and 'default_pack' not in cfg:
+    cfg['default_pack'] = cfg.pop('active_pack')
+    changed = True
+elif 'active_pack' in cfg:
+    cfg.pop('active_pack')
+    changed = True
+if cfg.get('pack_rotation_mode') == 'agentskill':
+    cfg['pack_rotation_mode'] = 'session_override'
+    changed = True
+if changed:
+    json.dump(cfg, open(config_path, 'w'), indent=2)
+PYTHON
+
+  python3 <<'PYTHON'
+import json, os
+config_path = os.environ['TEST_DIR'] + '/config.json'
+cfg = json.load(open(config_path))
+assert cfg.get('default_pack') == 'sc_kerrigan', "default_pack should be unchanged"
+assert cfg.get('pack_rotation_mode') == 'session_override', "mode should be unchanged"
+PYTHON
+}
+
+# ============================================================
+# packs install-local
+# ============================================================
+
+@test "packs install-local copies a valid local pack" {
+  # Create a local pack directory with a valid manifest + sound
+  LOCAL_PACK="$(mktemp -d)"
+  cat > "$LOCAL_PACK/openpeon.json" <<'JSON'
+{
+  "cesp_version": "1.0",
+  "name": "local_test",
+  "display_name": "Local Test Pack",
+  "categories": {
+    "session.start": {
+      "sounds": [
+        { "file": "sounds/Hello.wav", "label": "Hello" }
+      ]
+    }
+  }
+}
+JSON
+  mkdir -p "$LOCAL_PACK/sounds"
+  touch "$LOCAL_PACK/sounds/Hello.wav"
+
+  run bash "$PEON_SH" packs install-local "$LOCAL_PACK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"local_test"* ]]
+  # Pack directory should exist
+  [ -d "$TEST_DIR/packs/local_test" ]
+  # Manifest should be copied
+  [ -f "$TEST_DIR/packs/local_test/openpeon.json" ]
+  # Sound file should be copied
+  [ -f "$TEST_DIR/packs/local_test/sounds/Hello.wav" ]
+  rm -rf "$LOCAL_PACK"
+}
+
+@test "packs install-local fails with no arguments" {
+  run bash "$PEON_SH" packs install-local
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage"* ]]
+}
+
+@test "packs install-local fails for nonexistent directory" {
+  run bash "$PEON_SH" packs install-local /tmp/no-such-dir-peon-test-$$
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not found"* ]]
+}
+
+@test "packs install-local fails when no manifest present" {
+  NO_MANIFEST="$(mktemp -d)"
+  touch "$NO_MANIFEST/some_file.wav"
+
+  run bash "$PEON_SH" packs install-local "$NO_MANIFEST"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"openpeon.json"* ]]
+  rm -rf "$NO_MANIFEST"
+}
+
+@test "packs install-local refuses overwrite without --force" {
+  # Pre-create the target directory
+  mkdir -p "$TEST_DIR/packs/overwrite_test"
+  cat > "$TEST_DIR/packs/overwrite_test/openpeon.json" <<'JSON'
+{"name":"overwrite_test"}
+JSON
+
+  LOCAL_PACK="$(mktemp -d)"
+  cat > "$LOCAL_PACK/openpeon.json" <<'JSON'
+{"cesp_version":"1.0","name":"overwrite_test","display_name":"Overwrite Test","categories":{}}
+JSON
+
+  run bash "$PEON_SH" packs install-local "$LOCAL_PACK"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already exists"* ]] || [[ "$output" == *"--force"* ]]
+  rm -rf "$LOCAL_PACK"
+}
+
+@test "packs install-local overwrites with --force" {
+  mkdir -p "$TEST_DIR/packs/force_test"
+  echo '{"name":"force_test"}' > "$TEST_DIR/packs/force_test/openpeon.json"
+
+  LOCAL_PACK="$(mktemp -d)"
+  cat > "$LOCAL_PACK/openpeon.json" <<'JSON'
+{"cesp_version":"1.0","name":"force_test","display_name":"Force Test","categories":{"session.start":{"sounds":[{"file":"sounds/Hi.wav","label":"Hi"}]}}}
+JSON
+  mkdir -p "$LOCAL_PACK/sounds"
+  touch "$LOCAL_PACK/sounds/Hi.wav"
+
+  run bash "$PEON_SH" packs install-local "$LOCAL_PACK" --force
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_DIR/packs/force_test/sounds/Hi.wav" ]
+  rm -rf "$LOCAL_PACK"
+}
+
+@test "packs install-local pack appears in packs list" {
+  LOCAL_PACK="$(mktemp -d)"
+  cat > "$LOCAL_PACK/openpeon.json" <<'JSON'
+{"cesp_version":"1.0","name":"listed_pack","display_name":"Listed Pack","categories":{"session.start":{"sounds":[{"file":"sounds/A.wav","label":"A"}]}}}
+JSON
+  mkdir -p "$LOCAL_PACK/sounds"
+  touch "$LOCAL_PACK/sounds/A.wav"
+
+  bash "$PEON_SH" packs install-local "$LOCAL_PACK"
+  run bash "$PEON_SH" packs list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"listed_pack"* ]]
+  [[ "$output" == *"Listed Pack"* ]]
+  rm -rf "$LOCAL_PACK"
+}
+
+@test "packs install-local warns about missing sound files" {
+  LOCAL_PACK="$(mktemp -d)"
+  cat > "$LOCAL_PACK/openpeon.json" <<'JSON'
+{"cesp_version":"1.0","name":"warn_pack","display_name":"Warn Pack","categories":{"session.start":{"sounds":[{"file":"sounds/Missing.wav","label":"Missing"}]}}}
+JSON
+
+  run bash "$PEON_SH" packs install-local "$LOCAL_PACK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Warning"* ]] || [[ "$output" == *"missing"* ]] || [[ "${lines[*]}" == *"Missing.wav"* ]]
+  [ -d "$TEST_DIR/packs/warn_pack" ]
+  rm -rf "$LOCAL_PACK"
+}
+
+@test "packs install-local falls back to manifest.json" {
+  LOCAL_PACK="$(mktemp -d)"
+  cat > "$LOCAL_PACK/manifest.json" <<'JSON'
+{"cesp_version":"1.0","name":"fallback_pack","display_name":"Fallback Pack","categories":{}}
+JSON
+
+  run bash "$PEON_SH" packs install-local "$LOCAL_PACK"
+  [ "$status" -eq 0 ]
+  [ -d "$TEST_DIR/packs/fallback_pack" ]
+  rm -rf "$LOCAL_PACK"
+}
+
+@test "packs install-local falls back to dirname when name field missing" {
+  LOCAL_PACK="$(mktemp -d)/my_custom_pack"
+  mkdir -p "$LOCAL_PACK"
+  cat > "$LOCAL_PACK/openpeon.json" <<'JSON'
+{"cesp_version":"1.0","display_name":"No Name Field","categories":{}}
+JSON
+
+  run bash "$PEON_SH" packs install-local "$LOCAL_PACK"
+  [ "$status" -eq 0 ]
+  [ -d "$TEST_DIR/packs/my_custom_pack" ]
+  rm -rf "$(dirname "$LOCAL_PACK")"
+}
+
+# ============================================================
+# Headphones-only mode
+# ============================================================
+
+@test "headphones_only: plays sound when headphones connected" {
+  # Enable headphones_only in config
+  /usr/bin/python3 -c "
+import json
+c = json.load(open('$TEST_DIR/config.json'))
+c['headphones_only'] = True
+json.dump(c, open('$TEST_DIR/config.json', 'w'))
+"
+  # Mock headphones connected
+  touch "$TEST_DIR/.mock_headphones_connected"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+@test "headphones_only: skips sound when speakers only" {
+  # Enable headphones_only in config
+  /usr/bin/python3 -c "
+import json
+c = json.load(open('$TEST_DIR/config.json'))
+c['headphones_only'] = True
+json.dump(c, open('$TEST_DIR/config.json', 'w'))
+"
+  # Mock speakers only (no headphones)
+  touch "$TEST_DIR/.mock_speakers_only"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  ! afplay_was_called
+}
+
+@test "headphones_only disabled: plays sound regardless of output device" {
+  # headphones_only defaults to false, mock speakers only
+  touch "$TEST_DIR/.mock_speakers_only"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+# ============================================================
+# Meeting detection — auto-suppress during calls
+# ============================================================
+
+@test "meeting_detect: plays sound when no meeting active" {
+  # Enable meeting_detect in config
+  /usr/bin/python3 -c "
+import json
+c = json.load(open('$TEST_DIR/config.json'))
+c['meeting_detect'] = True
+json.dump(c, open('$TEST_DIR/config.json', 'w'))
+"
+  # No meeting fixtures → detect_meeting returns 1
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+@test "meeting_detect: skips sound when mic in use" {
+  # Enable meeting_detect in config
+  /usr/bin/python3 -c "
+import json
+c = json.load(open('$TEST_DIR/config.json'))
+c['meeting_detect'] = True
+json.dump(c, open('$TEST_DIR/config.json', 'w'))
+"
+  # Mock mic in use (layer 2)
+  touch "$TEST_DIR/.mock_mic_in_use"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  ! afplay_was_called
+}
+
+@test "meeting_detect disabled: plays sound regardless" {
+  # meeting_detect defaults to false, mock an active meeting
+  touch "$TEST_DIR/.mock_meeting_active"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+# ============================================================
+# Suppress sound when tab focused
+# ============================================================
+
+@test "suppress_sound_when_tab_focused: skips sound when terminal is focused" {
+  # Enable the feature
+  /usr/bin/python3 -c "
+import json
+c = json.load(open('$TEST_DIR/config.json'))
+c['suppress_sound_when_tab_focused'] = True
+json.dump(c, open('$TEST_DIR/config.json', 'w'))
+"
+  # Mock terminal as focused (Terminal.app — a recognized terminal)
+  echo "Terminal" > "$TEST_DIR/.mock_terminal_focused"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  ! afplay_was_called
+}
+
+@test "suppress_sound_when_tab_focused: plays sound when terminal is not focused" {
+  # Enable the feature
+  /usr/bin/python3 -c "
+import json
+c = json.load(open('$TEST_DIR/config.json'))
+c['suppress_sound_when_tab_focused'] = True
+json.dump(c, open('$TEST_DIR/config.json', 'w'))
+"
+  # Default mock: osascript returns "Safari" (not a terminal) — not focused
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+@test "suppress_sound_when_tab_focused disabled: plays sound even when terminal is focused" {
+  # Feature defaults to false — mock terminal as focused
+  echo "Terminal" > "$TEST_DIR/.mock_terminal_focused"
+
+  run_peon '{"hook_event_name":"Stop","cwd":"/tmp/myproject","session_id":"s1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+}
+
+# ============================================================
+# packs bind / unbind / bindings CLI
+# ============================================================
+
+@test "packs bind sets path_rules entry" {
+  run bash "$PEON_SH" packs bind peon
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bound peon to"* ]]
+  # Verify config has the rule (pattern is exact PWD)
+  rules=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(len(c.get('path_rules', [])))")
+  [ "$rules" = "1" ]
+  pack=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c['path_rules'][0]['pack'])")
+  [ "$pack" = "peon" ]
+}
+
+@test "packs bind with --pattern stores custom pattern" {
+  run bash "$PEON_SH" packs bind sc_kerrigan --pattern "*/myproject/*"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bound sc_kerrigan to */myproject/*"* ]]
+  pattern=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c['path_rules'][0]['pattern'])")
+  [ "$pattern" = "*/myproject/*" ]
+}
+
+@test "packs bind updates existing rule for same pattern" {
+  # Bind peon first, then rebind sc_kerrigan to same pattern
+  bash "$PEON_SH" packs bind peon --pattern "*/proj/*"
+  bash "$PEON_SH" packs bind sc_kerrigan --pattern "*/proj/*"
+  rules=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(len(c.get('path_rules', [])))")
+  [ "$rules" = "1" ]
+  pack=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c['path_rules'][0]['pack'])")
+  [ "$pack" = "sc_kerrigan" ]
+}
+
+@test "packs bind validates pack exists" {
+  run bash "$PEON_SH" packs bind nonexistent
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not found"* ]]
+}
+
+@test "packs bind with --install downloads missing pack" {
+  setup_pack_download_env
+  run bash "$PEON_SH" packs bind test_pack_a --install --pattern "*/test/*"
+  [ "$status" -eq 0 ]
+  [ -d "$TEST_DIR/packs/test_pack_a" ]
+  [[ "$output" == *"bound test_pack_a"* ]]
+}
+
+@test "packs unbind removes rule" {
+  # Bind first using explicit pattern matching PWD
+  bash "$PEON_SH" packs bind peon --pattern "$TEST_DIR/*"
+  rules=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(len(c.get('path_rules', [])))")
+  [ "$rules" = "1" ]
+  # Unbind with same pattern
+  run bash "$PEON_SH" packs unbind --pattern "$TEST_DIR/*"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unbound"* ]]
+  rules=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(len(c.get('path_rules', [])))")
+  [ "$rules" = "0" ]
+}
+
+@test "packs unbind with --pattern removes specific pattern" {
+  bash "$PEON_SH" packs bind peon --pattern "*/proj-a/*"
+  bash "$PEON_SH" packs bind sc_kerrigan --pattern "*/proj-b/*"
+  run bash "$PEON_SH" packs unbind --pattern "*/proj-a/*"
+  [ "$status" -eq 0 ]
+  rules=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(len(c.get('path_rules', [])))")
+  [ "$rules" = "1" ]
+  pack=$(/usr/bin/python3 -c "import json; c=json.load(open('$TEST_DIR/config.json')); print(c['path_rules'][0]['pack'])")
+  [ "$pack" = "sc_kerrigan" ]
+}
+
+@test "packs unbind no matching rule prints message" {
+  # Add a rule so path_rules is non-empty, then unbind a different pattern
+  bash "$PEON_SH" packs bind peon --pattern "*/other/*"
+  run bash "$PEON_SH" packs unbind --pattern "*/nonexistent/*"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No binding found"* ]]
+}
+
+@test "packs bindings lists rules" {
+  bash "$PEON_SH" packs bind peon --pattern "*/proj-a/*"
+  bash "$PEON_SH" packs bind sc_kerrigan --pattern "*/proj-b/*"
+  run bash "$PEON_SH" packs bindings
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"*/proj-a/* -> peon"* ]]
+  [[ "$output" == *"*/proj-b/* -> sc_kerrigan"* ]]
+}
+
+@test "packs bindings empty prints message" {
+  run bash "$PEON_SH" packs bindings
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No pack bindings configured"* ]]
+}
+
+@test "packs bind end-to-end: bound pack plays correct sounds" {
+  # Bind sc_kerrigan to a path that matches our test CWD
+  bash "$PEON_SH" packs bind sc_kerrigan --pattern "*/myproject*"
+  # Fire an event with a matching cwd
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"bind1","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
+
+@test "packs bind default pattern (exact cwd) matches in event handler" {
+  # Bind sc_kerrigan using the exact path (simulating default bind from /home/user/myproject)
+  bash "$PEON_SH" packs bind sc_kerrigan --pattern "/home/user/myproject"
+  # Fire an event with that exact cwd
+  run_peon '{"hook_event_name":"Stop","cwd":"/home/user/myproject","session_id":"bind2","permission_mode":"default"}'
+  [ "$PEON_EXIT" -eq 0 ]
+  afplay_was_called
+  sound=$(afplay_sound)
+  [[ "$sound" == *"/packs/sc_kerrigan/sounds/"* ]]
+}
 

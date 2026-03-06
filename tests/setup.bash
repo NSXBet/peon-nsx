@@ -91,7 +91,7 @@ JSON
   # Create default config (CESP category names)
   cat > "$TEST_DIR/config.json" <<'JSON'
 {
-  "active_pack": "peon",
+  "default_pack": "peon",
   "volume": 0.5,
   "enabled": true,
   "categories": {
@@ -104,7 +104,8 @@ JSON
     "user.spam": true
   },
   "annoyed_threshold": 3,
-  "annoyed_window_seconds": 10
+  "annoyed_window_seconds": 10,
+  "session_start_cooldown_seconds": 0
 }
 JSON
 
@@ -137,12 +138,113 @@ SCRIPT
     chmod +x "$MOCK_BIN/$player"
   done
 
+  # Mock terminal-notifier — log calls instead of sending real notifications
+  cat > "$MOCK_BIN/terminal-notifier" <<'SCRIPT'
+#!/bin/bash
+echo "$@" >> "${CLAUDE_PEON_DIR}/terminal_notifier.log"
+SCRIPT
+  chmod +x "$MOCK_BIN/terminal-notifier"
+
+  # Mock system_profiler — returns audio device info for headphone detection
+  cat > "$MOCK_BIN/system_profiler" <<'SCRIPT'
+#!/bin/bash
+# Check for mock fixture files
+if [ -f "${CLAUDE_PEON_DIR}/.mock_headphones_connected" ]; then
+  cat <<'EOF'
+Audio:
+
+    Devices:
+
+        External Headphones:
+
+          Default Output Device: Yes
+          Input Channels: 0
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Transport: USB
+
+        MacBook Pro Speakers:
+
+          Default Output Device: No
+          Input Channels: 0
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Transport: Built-in
+
+EOF
+elif [ -f "${CLAUDE_PEON_DIR}/.mock_speakers_only" ]; then
+  cat <<'EOF'
+Audio:
+
+    Devices:
+
+        MacBook Pro Speakers:
+
+          Default Output Device: Yes
+          Default System Output Device: Yes
+          Input Channels: 0
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Transport: Built-in
+
+EOF
+else
+  # Default: headphones connected (same as .mock_headphones_connected)
+  cat <<'EOF'
+Audio:
+
+    Devices:
+
+        External Headphones:
+
+          Default Output Device: Yes
+          Input Channels: 0
+          Manufacturer: Apple Inc.
+          Output Channels: 2
+          Transport: USB
+
+EOF
+fi
+SCRIPT
+  chmod +x "$MOCK_BIN/system_profiler"
+
+  # Mock lsappinfo — returns a bundle ID for a given PID (IDE click-to-focus)
+  cat > "$MOCK_BIN/lsappinfo" <<'SCRIPT'
+#!/bin/bash
+# Parse -app pid:<PID> or pid=<PID> to extract the requested PID
+for arg in "$@"; do
+  case "$arg" in
+    pid:*|pid=*)
+      _pid="${arg#pid:}"
+      _pid="${_pid#pid=}"
+      # Return mock bundle IDs for known test PIDs
+      if [ -f "${CLAUDE_PEON_DIR}/.mock_ide_bundle_id" ]; then
+        bid=$(cat "${CLAUDE_PEON_DIR}/.mock_ide_bundle_id")
+        echo "\"bundleid\"=\"$bid\""
+        exit 0
+      fi
+      ;;
+  esac
+done
+exit 1
+SCRIPT
+  chmod +x "$MOCK_BIN/lsappinfo"
+
   # Mock osascript — log calls instead of running AppleScript/JXA
   cat > "$MOCK_BIN/osascript" <<'SCRIPT'
 #!/bin/bash
-# For the frontmost app check, return "Safari" (not a terminal) so notifications fire
+# For the frontmost app check, return terminal name or "Safari" based on fixture
 if [[ "$*" == *"frontmost"* ]]; then
-  echo "Safari"
+  if [ -f "${CLAUDE_PEON_DIR}/.mock_terminal_focused" ]; then
+    cat "${CLAUDE_PEON_DIR}/.mock_terminal_focused"
+  else
+    echo "Safari"
+  fi
+elif [[ "$*" == *"iTerm2"* ]] && [[ "$*" == *"tty"* ]]; then
+  # iTerm2 tty query — return mock tty if fixture exists
+  if [ -f "${CLAUDE_PEON_DIR}/.mock_iterm_active_ttys" ]; then
+    cat "${CLAUDE_PEON_DIR}/.mock_iterm_active_ttys"
+  fi
 elif [[ "$1" == "-l" ]] && [[ "$2" == "JavaScript" ]]; then
   # JXA overlay call — log to overlay.log with full arguments
   echo "$@" >> "${CLAUDE_PEON_DIR}/overlay.log"
@@ -247,12 +349,35 @@ SCRIPT
 
   export PATH="$MOCK_BIN:$PATH"
 
+  # Mock meeting-detect binary — returns MIC_IN_USE or MIC_NOT_IN_USE based on fixture
+  mkdir -p "$TEST_DIR/scripts"
+  cat > "$TEST_DIR/scripts/meeting-detect" <<'SCRIPT'
+#!/bin/bash
+if [ -f "${CLAUDE_PEON_DIR}/.mock_mic_in_use" ]; then
+  echo "MIC_IN_USE"
+else
+  echo "MIC_NOT_IN_USE"
+fi
+SCRIPT
+  chmod +x "$TEST_DIR/scripts/meeting-detect"
+
+  # Copy notify.sh into test dir so send_notification() can find it
+  _src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  mkdir -p "$TEST_DIR/scripts"
+  if [ -f "$_src_dir/scripts/notify.sh" ]; then
+    cp "$_src_dir/scripts/notify.sh" "$TEST_DIR/scripts/notify.sh"
+    chmod +x "$TEST_DIR/scripts/notify.sh"
+  fi
+
   # Mock relay as available for devcontainer/SSH tests
   # (Tests running in devcontainer need this to prevent "relay not reachable" errors)
   touch "$TEST_DIR/.relay_available"
 
   # Locate peon.sh (relative to this test file)
   PEON_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/peon.sh"
+  # Change to TEST_DIR so PWD-based local config lookup does not pick up
+  # a real installation config (e.g. with pack_rotation) from outside the test env
+  cd "$TEST_DIR"
 }
 
 teardown_test_env() {

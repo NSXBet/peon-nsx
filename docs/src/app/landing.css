@@ -156,8 +156,9 @@ a:hover { text-decoration: underline; }
 .section-desc {
   color: var(--wc3-text-muted);
   max-width: 520px;
-  margin-bottom: 40px;
+  margin: 0 auto 40px;
   font-size: 0.95rem;
+  text-align: center;
 }
 
 /* --- WC3 textured frames --- */

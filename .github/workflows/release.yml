@@ -38,7 +38,7 @@ jobs:
           shasum -a 256 "${files[@]}" > checksums.txt
 
       - name: Create release with checksums
-        uses: softprops/action-gh-release@v1
+        uses: nsx-actions/softprops_action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
